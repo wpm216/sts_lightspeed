@@ -21,8 +21,11 @@
 
 using namespace sts;
 
+// Forward declaration of RL bindings init function
+void init_rl_bindings(pybind11::module_ &m);
+
 PYBIND11_MODULE(slaythespire, m) {
-    m.doc() = "pybind11 example plugin"; // optional module docstring
+    m.doc() = "Slay the Spire simulator with RL bindings";
     m.def("play", &sts::py::play, "play Slay the Spire Console");
     m.def("get_seed_str", &SeedHelper::getString, "gets the integral representation of seed string used in the game ui");
     m.def("get_seed_long", &SeedHelper::getLong, "gets the seed string representation of an integral seed");
@@ -103,7 +106,13 @@ PYBIND11_MODULE(slaythespire, m) {
 
         .def_readwrite("shop_remove_count", &GameContext::shopRemoveCount)
         .def_readwrite("speedrun_pace", &GameContext::speedrunPace)
-        .def_readwrite("note_for_yourself_card", &GameContext::noteForYourselfCard);
+        .def_readwrite("note_for_yourself_card", &GameContext::noteForYourselfCard)
+
+        .def_readwrite("potion_capacity", &GameContext::potionCapacity)
+        .def_readwrite("potion_count", &GameContext::potionCount)
+        .def_property_readonly("potions", [](const GameContext &gc) {
+            return std::vector<Potion>(gc.potions.begin(), gc.potions.begin() + gc.potionCapacity);
+        }, "returns potions in inventory slots");
 
     pybind11::class_<RelicInstance> relic(m, "Relic");
     relic.def_readwrite("id", &RelicInstance::id)
@@ -827,6 +836,9 @@ PYBIND11_MODULE(slaythespire, m) {
         .value("CIRCLET", RelicId::CIRCLET)
         .value("RED_CIRCLET", RelicId::RED_CIRCLET)
         .value("INVALID", RelicId::INVALID);
+
+    // Initialize RL-specific bindings
+    init_rl_bindings(m);
 
 #ifdef VERSION_INFO
     m.attr("__version__") = MACRO_STRINGIFY(VERSION_INFO);

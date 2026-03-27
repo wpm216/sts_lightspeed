@@ -2,6 +2,7 @@
 // Created by gamerpuppy on 7/4/2021.
 //
 
+#include <algorithm>
 #include <cassert>
 
 #include <constants/PlayerStatusEffects.h>

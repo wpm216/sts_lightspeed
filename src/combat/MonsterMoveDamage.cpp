@@ -2,6 +2,8 @@
 // Created by gamerpuppy on 9/27/2021.
 //
 
+#include <algorithm>
+
 #include "combat/Monster.h"
 #include "combat/BattleContext.h"
 

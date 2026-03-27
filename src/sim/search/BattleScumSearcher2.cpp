@@ -2,12 +2,13 @@
 // Created by keega on 9/18/2021.
 //
 
-#include "sim/search/BattleScumSearcher2.h"
-#include "sim/search/ExpertKnowledge.h"
-
+#include <algorithm>
 #include <utility>
 #include <string>
 #include <memory>
+
+#include "sim/search/BattleScumSearcher2.h"
+#include "sim/search/ExpertKnowledge.h"
 
 using namespace sts;
 

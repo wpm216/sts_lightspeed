@@ -2,12 +2,13 @@
 // Created by keega on 9/27/2021.
 //
 
+#include <algorithm>
+#include <map>
+#include <array>
+
 #include <sim/search/SimpleAgent.h>
 #include <game/Game.h>
 #include "sim/PrintHelpers.h"
-
-#include <map>
-#include <array>
 #include <bitset>
 #include <thread>
 #include <mutex>
