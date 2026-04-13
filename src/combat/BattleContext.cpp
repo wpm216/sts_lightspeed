@@ -727,16 +727,12 @@ void BattleContext::executeActions() {
 
     while (true)
     {
-        if (++loopCount > 1000000 || monsters.monstersAlive < 0 || turn > 500) {
-            // something went wrong
-            if (turn > 500) {
-                outcome = Outcome::PLAYER_LOSS;
-                break;
-            }
-
-            std::cerr << seed << std::endl;
-            std::cout << *this << '\n';
-            assert(false);
+        if (++loopCount > 100000 || monsters.monstersAlive < 0 || turn > 100) {
+            // Something went wrong — infinite loop from card combos like
+            // Corruption + Dead Branch + Havoc, or a turn count overflow.
+            // Treat as a player loss instead of crashing.
+            outcome = Outcome::PLAYER_LOSS;
+            break;
         }
 
         if (inputState != InputState::EXECUTING_ACTIONS) {
@@ -2212,6 +2208,7 @@ void BattleContext::afterMonsterTurns() {
     player.attacksPlayedThisTurn = 0;
     player.skillsPlayedThisTurn = 0;
     player.cardsDiscardedThisTurn = 0;
+    cardsGeneratedThisTurn = 0;
 
     player.rechargeEnergy(*this); // this is called by the PlayerTurnEffect in game, I think it can be done here
 }

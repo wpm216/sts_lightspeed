@@ -85,6 +85,7 @@ namespace sts {
         std::array<Potion, 5> potions;
 
         int turn = 0;
+        int cardsGeneratedThisTurn = 0;
         Player player;
         MonsterGroup monsters;
         CardManager cards;

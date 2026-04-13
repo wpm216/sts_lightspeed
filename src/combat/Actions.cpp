@@ -230,6 +230,11 @@ Action Actions::MakeTempCardInHand(CardInstance card, int amount) {
     // todo master reality when the action is created
     return {[=](BattleContext &bc) {
         for (int i = 0; i < amount; ++i) {
+            // Cap cards generated per turn to prevent Corruption + Dead Branch
+            // infinite loops where each exhausted Skill generates another free Skill.
+            if (++bc.cardsGeneratedThisTurn > 50) {
+                return;
+            }
             CardInstance c(card);
             c.uniqueId = bc.cards.nextUniqueCardId++;
             bc.cards.notifyAddCardToCombat(c);
