@@ -307,17 +307,24 @@ Potion sts::returnRandomPotion(Random &potionRng, CharacterClass cc, bool limite
 }
 
 Potion sts::returnRandomPotionOfRarity(Random &potionRng, PotionRarity rarity, CharacterClass cc, bool limited) {
-    // this is dumb.
-    Potion temp = getRandomPotion(potionRng, cc);
-    bool spamCheck = limited;
-    while(potionRarities[static_cast<int>(temp)] != rarity || spamCheck) {
-        spamCheck = limited;
-        temp = getRandomPotion(potionRng, cc);
-        if (temp != Potion::FRUIT_JUICE) {
-            spamCheck = false;
-        }
+    // Build a filtered list of potions matching the target rarity,
+    // excluding Fruit Juice when limited (EntropicBrew).
+    // This replaces the original rejection-sampling loop which could
+    // spin indefinitely with certain RNG states.
+    Potion candidates[PotionPool::poolSize];
+    int count = 0;
+    for (int i = 0; i < PotionPool::poolSize; ++i) {
+        Potion p = PotionPool::getPotionForClass(cc, i);
+        if (potionRarities[static_cast<int>(p)] != rarity) continue;
+        if (limited && p == Potion::FRUIT_JUICE) continue;
+        candidates[count++] = p;
     }
-    return temp;
+    if (count == 0) {
+        // Fallback: no potions of this rarity (shouldn't happen)
+        return Potion::BLOCK_POTION;
+    }
+    int idx = potionRng.random(count - 1);
+    return candidates[idx];
 }
 
 Potion sts::getRandomPotion(Random &potionRng, CharacterClass cc) {
