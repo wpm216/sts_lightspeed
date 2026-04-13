@@ -125,6 +125,9 @@ namespace sts {
         [[nodiscard]] bool isHalfDead() const;
         [[nodiscard]] bool doesEscapeNext() const;
         [[nodiscard]] bool isAttacking() const;
+        [[nodiscard]] bool isBlocking() const;
+        [[nodiscard]] bool isBuffing() const;
+        [[nodiscard]] bool isDebuffing() const;
 
         // ***********************
 

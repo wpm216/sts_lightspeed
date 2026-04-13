@@ -411,7 +411,112 @@ namespace sts {
             "WRITHING_MASS_STRONG_STRIKE",
     };
 
-    static constexpr bool isMoveAttack(MMID move) { // todo add intent information / base damage / multi attack info
+    // Intent classification: does this move involve the enemy gaining block?
+    static constexpr bool isMoveBlock(MMID move) {
+        switch (move) {
+            case MMID::CENTURION_DEFEND:          // gains block
+            case MMID::DARKLING_HARDEN:            // gains block
+            case MMID::DECA_SQUARE_OF_PROTECTION:  // gains block for all
+            case MMID::JAW_WORM_BELLOW:            // gains block + strength (also buff)
+            case MMID::SHIELD_GREMLIN_PROTECT:     // gives block to ally
+            case MMID::SPHERIC_GUARDIAN_HARDEN:     // attack + block
+            case MMID::SPIRE_SHIELD_FORTIFY:       // gains block
+            case MMID::THE_CHAMP_DEFENSIVE_STANCE: // gains block + metallicize
+            case MMID::THE_GUARDIAN_DEFENSIVE_MODE: // enters defensive mode (high block)
+            case MMID::THE_GUARDIAN_CHARGING_UP:    // gains block while charging
+            case MMID::JAW_WORM_THRASH:            // attack + block
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Intent classification: does this move buff the enemy (or allies)?
+    static constexpr bool isMoveBuff(MMID move) {
+        switch (move) {
+            case MMID::BRONZE_AUTOMATON_BOOST:     // gains strength
+            case MMID::BYRD_CAW:                   // gains strength (in flock)
+            case MMID::BYRD_FLY:                   // gains flight/block
+            case MMID::CULTIST_INCANTATION:        // ritual (gains strength each turn)
+            case MMID::DONU_CIRCLE_OF_POWER:       // buffs strength for both Donu and Deca
+            case MMID::FUNGI_BEAST_GROW:           // gains strength
+            case MMID::GIANT_HEAD_GLARE:           // gains strength (slow)
+            case MMID::GREMLIN_LEADER_ENCOURAGE:   // buffs allies
+            case MMID::GREMLIN_LEADER_RALLY:       // summons gremlins
+            case MMID::GREMLIN_NOB_BELLOW:         // gains enrage (strength on skill use)
+            case MMID::GREMLIN_WIZARD_CHARGING:    // charging up (telegraph)
+            case MMID::HEXAGHOST_ACTIVATE:         // activates
+            case MMID::HEXAGHOST_INFLAME:          // gains strength
+            case MMID::JAW_WORM_BELLOW:            // gains strength + block
+            case MMID::MYSTIC_BUFF:                // buffs ally with strength
+            case MMID::MYSTIC_HEAL:                // heals ally
+            case MMID::RED_LOUSE_GROW:             // gains strength
+            case MMID::GREEN_LOUSE_SPIT_WEB:       // applies weak (debuff, but also self-buff context)
+            case MMID::REPTOMANCER_SUMMON:         // summons daggers
+            case MMID::SLIME_BOSS_PREPARING:       // preparing to slam
+            case MMID::THE_CHAMP_GLOAT:            // gains strength
+            case MMID::THE_CHAMP_ANGER:            // gains strength
+            case MMID::THE_CHAMP_TAUNT:            // gains metallicize + vulnerable on player
+            case MMID::THE_COLLECTOR_BUFF:         // gains strength + block
+            case MMID::THE_COLLECTOR_SPAWN:        // summons minions
+            case MMID::TIME_EATER_HASTE:           // heals + removes debuffs
+            case MMID::CORRUPT_HEART_BUFF:         // gains various buffs
+            case MMID::DARKLING_REINCARNATE:       // revives
+            case MMID::DARKLING_REGROW:            // regrows (half-dead heal)
+            case MMID::BRONZE_AUTOMATON_SPAWN_ORBS: // summons orbs
+            case MMID::BRONZE_ORB_SUPPORT_BEAM:    // heals Automaton
+            case MMID::SPIKER_SPIKE:               // gains thorns
+            case MMID::WRITHING_MASS_IMPLANT:      // gains parasite buff
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Intent classification: does this move debuff or apply status to the player?
+    static constexpr bool isMoveDebuff(MMID move) {
+        switch (move) {
+            case MMID::ACID_SLIME_L_LICK:          // applies weak
+            case MMID::ACID_SLIME_M_LICK:          // applies weak
+            case MMID::ACID_SLIME_S_LICK:          // applies weak
+            case MMID::ACID_SLIME_L_CORROSIVE_SPIT: // attack + slimed (also attack)
+            case MMID::ACID_SLIME_M_CORROSIVE_SPIT: // attack + slimed (also attack)
+            case MMID::BEAR_BEAR_HUG:              // applies constrict (dazed)
+            case MMID::BLUE_SLAVER_RAKE:           // attack + weak (also attack)
+            case MMID::CHOSEN_DEBILITATE:          // attack + vulnerable (also attack)
+            case MMID::CHOSEN_HEX:                 // applies hex (dazed on play)
+            case MMID::CHOSEN_DRAIN:               // attack + weak (also attack)
+            case MMID::CORRUPT_HEART_DEBILITATE:   // applies vulnerable + weak + frail
+            case MMID::GREEN_LOUSE_SPIT_WEB:       // applies weak
+            case MMID::LAGAVULIN_SIPHON_SOUL:      // reduces str + dex
+            case MMID::NEMESIS_DEBUFF:             // applies burn to deck
+            case MMID::RED_SLAVER_ENTANGLE:        // applies entangle (can't play attacks)
+            case MMID::RED_SLAVER_SCRAPE:          // attack + vulnerable (also attack)
+            case MMID::REPULSOR_REPULSE:           // adds dazed to draw pile
+            case MMID::SENTRY_BOLT:                // adds dazed to draw pile
+            case MMID::SNECKO_PERPLEXING_GLARE:    // applies confused
+            case MMID::SNAKE_PLANT_ENFEEBLING_SPORES: // applies frail + weak
+            case MMID::SPIRE_GROWTH_CONSTRICT:     // applies constrict
+            case MMID::SPIKE_SLIME_L_LICK:         // applies frail
+            case MMID::SPIKE_SLIME_M_LICK:         // applies frail
+            case MMID::THE_GUARDIAN_VENT_STEAM:     // applies weak + vulnerable
+            case MMID::THE_MAW_ROAR:               // applies weak + frail
+            case MMID::THE_MAW_DROOL:              // applies slimed
+            case MMID::TIME_EATER_RIPPLE:          // applies weak + vulnerable + frail
+            case MMID::WRITHING_MASS_WITHER:       // applies weak + vulnerable
+            case MMID::ROMEO_MOCK:                 // applies weak + frail
+            case MMID::MYSTIC_ATTACK_DEBUFF:       // attack + frail (also attack)
+            case MMID::SPHERIC_GUARDIAN_ATTACK_DEBUFF: // attack + frail (also attack)
+            case MMID::BRONZE_ORB_STASIS:          // steals card from hand
+            case MMID::SLIME_BOSS_GOOP_SPRAY:      // adds slimed to deck
+            case MMID::THE_CHAMP_TAUNT:            // applies vulnerable (also buff)
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static constexpr bool isMoveAttack(MMID move) {
 
         switch (move) {
             case MMID::ACID_SLIME_L_CORROSIVE_SPIT:

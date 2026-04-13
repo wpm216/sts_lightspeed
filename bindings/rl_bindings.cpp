@@ -20,6 +20,7 @@
 #include "combat/Player.h"
 #include "combat/InputState.h"
 #include "game/GameContext.h"
+#include "game/Shop.h"
 #include "sim/search/Action.h"
 #include "sim/search/GameAction.h"
 #include "sim/PrintHelpers.h"
@@ -217,13 +218,16 @@ void init_rl_bindings(py::module_ &m) {
         .def("is_half_dead", &Monster::isHalfDead)
         .def("is_escaping", &Monster::isEscaping)
         .def("is_attacking", &Monster::isAttacking)
+        .def("is_blocking", &Monster::isBlocking)
+        .def("is_buffing", &Monster::isBuffing)
+        .def("is_debuffing", &Monster::isDebuffing)
         .def("get_name", &Monster::getName)
         .def("get_move_damage", [](const Monster &m, const BattleContext &bc) {
             return m.getMoveBaseDamage(bc);
         }, "get base damage info for monster's current move")
-        .def_property_readonly("move_id", [](const Monster &m) {
-            return m.moveHistory[0];
-        })
+        .def_property_readonly("move_id_int", [](const Monster &m) -> int {
+            return static_cast<int>(m.moveHistory[0]);
+        }, "current move as integer (MonsterMoveId enum value)")
         .def("__repr__", [](const Monster &m) {
             std::string s("<Monster ");
             s += m.getName();
@@ -338,12 +342,26 @@ void init_rl_bindings(py::module_ &m) {
     // ============================
     // GameAction (non-combat action)
     // ============================
+    // ============================
+    // GameAction::RewardsActionType enum
+    // ============================
+    py::enum_<search::GameAction::RewardsActionType>(m, "RewardsActionType")
+        .value("CARD", search::GameAction::RewardsActionType::CARD)
+        .value("GOLD", search::GameAction::RewardsActionType::GOLD)
+        .value("KEY", search::GameAction::RewardsActionType::KEY)
+        .value("POTION", search::GameAction::RewardsActionType::POTION)
+        .value("RELIC", search::GameAction::RewardsActionType::RELIC)
+        .value("CARD_REMOVE", search::GameAction::RewardsActionType::CARD_REMOVE)
+        .value("SKIP", search::GameAction::RewardsActionType::SKIP);
+
     py::class_<search::GameAction>(m, "GameAction")
         .def(py::init<int, int>(), py::arg("idx1"), py::arg("idx2") = 0)
         .def("is_valid", &search::GameAction::isValidAction)
         .def("execute", &search::GameAction::execute)
         .def("get_idx1", &search::GameAction::getIdx1)
         .def("get_idx2", &search::GameAction::getIdx2)
+        .def("get_rewards_action_type", &search::GameAction::getRewardsActionType,
+            "get the rewards/shop action type (CARD, POTION, RELIC, CARD_REMOVE, SKIP)")
         .def_static("get_all_actions", &search::GameAction::getAllActionsInState,
             "get all valid actions for the current non-combat game state")
         .def("__repr__", [](const search::GameAction &a, const GameContext &gc) {
@@ -353,12 +371,39 @@ void init_rl_bindings(py::module_ &m) {
         });
 
     // ============================
+    // Shop
+    // ============================
+    py::class_<Shop>(m, "Shop")
+        .def_property_readonly("cards", [](const Shop &s) {
+            return std::vector<Card>(s.cards, s.cards + 7);
+        }, "7 cards for sale (INVALID id if sold)")
+        .def_property_readonly("relics", [](const Shop &s) {
+            return std::vector<RelicId>(s.relics, s.relics + 3);
+        }, "3 relics for sale (INVALID if sold)")
+        .def_property_readonly("potions", [](const Shop &s) {
+            return std::vector<Potion>(s.potions, s.potions + 3);
+        }, "3 potions for sale (EMPTY_POTION_SLOT if sold)")
+        .def("card_price", [](const Shop &s, int idx) {
+            return s.cardPrice(idx);
+        }, "price of card at index (-1 if sold)")
+        .def("relic_price", [](const Shop &s, int idx) {
+            return s.relicPrice(idx);
+        }, "price of relic at index (-1 if sold)")
+        .def("potion_price", [](const Shop &s, int idx) {
+            return s.potionPrice(idx);
+        }, "price of potion at index (-1 if sold)")
+        .def_readonly("remove_cost", &Shop::removeCost,
+            "cost to remove a card (-1 if unavailable)");
+
+    // ============================
     // BattleContext
     // ============================
     py::class_<BattleContext>(m, "BattleContext")
         .def(py::init<>())
         .def("init", py::overload_cast<const GameContext&>(&BattleContext::init),
             "initialize battle from a GameContext that is in BATTLE screen state")
+        .def("init", py::overload_cast<const GameContext&, MonsterEncounter>(&BattleContext::init),
+            "initialize battle from a GameContext with a specific encounter")
         .def("exit_battle", &BattleContext::exitBattle,
             "transfer battle results back to the GameContext")
 
@@ -501,6 +546,11 @@ void init_rl_bindings(py::module_ &m) {
         return search::GameAction::getAllActionsInState(gc);
     }, "get all legal non-combat actions for the current game state");
 
+    m.def("get_shop", [](const GameContext &gc) -> const Shop& {
+        return gc.info.shop;
+    }, py::return_value_policy::reference_internal,
+    "get the current shop (only valid when screen_state == SHOP_ROOM)");
+
     m.def("execute_game_action", [](GameContext &gc, const search::GameAction &action) {
         action.execute(gc);
     }, "execute a non-combat action on the game context");
@@ -511,7 +561,61 @@ void init_rl_bindings(py::module_ &m) {
         return bc;
     }, "create a BattleContext from a GameContext in BATTLE screen state");
 
+    m.def("create_battle_context_with_encounter", [](const GameContext &gc, MonsterEncounter encounter) {
+        BattleContext bc;
+        bc.init(gc, encounter);
+        return bc;
+    }, py::arg("gc"), py::arg("encounter"),
+    "create a BattleContext from a GameContext with a specific encounter");
+
     m.def("exit_battle", [](const BattleContext &bc, GameContext &gc) {
         bc.exitBattle(gc);
     }, "transfer battle results back to the game context");
+
+    // ============================
+    // State-setting helpers for imitation learning
+    // ============================
+
+    // Deck manipulation
+    m.def("clear_deck", [](GameContext &gc) {
+        gc.deck.cards.clear();
+        gc.deck.cardTypeCounts = {0, 0, 0, 0};
+        gc.deck.upgradeableCount = 0;
+        gc.deck.transformableCount = 0;
+        gc.deck.bottleIdxs = {-1, -1, -1};
+    }, "remove all cards from the deck");
+
+    // Relic manipulation
+    m.def("obtain_relic", [](GameContext &gc, RelicId r) {
+        return gc.obtainRelic(r);
+    }, "add a relic to the game context (triggers relic-on-obtain effects)");
+
+    m.def("clear_relics", [](GameContext &gc) {
+        gc.relics.relics.clear();
+        gc.relics.relicBits0 = 0;
+        gc.relics.relicBits1 = 0;
+        gc.relics.relicBits2 = 0;
+    }, "remove all relics");
+
+    m.def("add_relic_raw", [](GameContext &gc, RelicId r, int data) {
+        gc.relics.add(RelicInstance{r, data});
+    }, py::arg("gc"), py::arg("relic_id"), py::arg("data") = 0,
+    "add a relic without triggering on-obtain effects (for state reconstruction)");
+
+    // Potion manipulation
+    m.def("obtain_potion", [](GameContext &gc, Potion p) {
+        gc.obtainPotion(p);
+    }, "add a potion to the first empty slot");
+
+    m.def("set_potions", [](GameContext &gc, const std::vector<Potion> &pots) {
+        int count = 0;
+        for (int i = 0; i < gc.potionCapacity && i < (int)pots.size(); ++i) {
+            gc.potions[i] = pots[i];
+            if (pots[i] != Potion::EMPTY_POTION_SLOT) ++count;
+        }
+        for (int i = (int)pots.size(); i < gc.potionCapacity; ++i) {
+            gc.potions[i] = Potion::EMPTY_POTION_SLOT;
+        }
+        gc.potionCount = count;
+    }, "set all potion slots directly (for state reconstruction)");
 }

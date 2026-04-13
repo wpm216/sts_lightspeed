@@ -268,6 +268,18 @@ bool Monster::isAttacking() const {
     return isMoveAttack(moveHistory[0]);
 }
 
+bool Monster::isBlocking() const {
+    return isMoveBlock(moveHistory[0]);
+}
+
+bool Monster::isBuffing() const {
+    return isMoveBuff(moveHistory[0]);
+}
+
+bool Monster::isDebuffing() const {
+    return isMoveDebuff(moveHistory[0]);
+}
+
 void Monster::heal(int amount) {
 #ifdef sts_asserts
     if (amount < 0) {
