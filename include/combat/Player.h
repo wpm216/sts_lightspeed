@@ -31,7 +31,11 @@ namespace sts {
     class BattleContext;
 
     struct Player {
-        CharacterClass cc;
+        // Default-init to IRONCLAD so a freshly-constructed Player can't
+        // expose uninitialized memory through any path that reads cc
+        // before BC::init runs (e.g. PotionPool::getPotionForClass
+        // OOB-indexing potionPool[4][33] with a garbage cc).
+        CharacterClass cc = CharacterClass::IRONCLAD;
 
         int16_t gold = 0;
         int curHp = 80;

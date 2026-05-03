@@ -12,6 +12,66 @@ using namespace sts;
 
 namespace sts {
     thread_local BattleContext *g_debug_bc;
+
+    thread_local void *g_last_poison_set_bt[24];
+    thread_local int g_last_poison_set_bt_n = 0;
+    thread_local int g_last_poison_set_count = 0;
+
+    // Full diagnostic for empty-Action push. Dumps the current
+    // BattleContext context (encounter, turn, monster intents, status flags)
+    // alongside a C++ backtrace. Without DWARF we can't atos the addresses,
+    // so the BC context is what tells us *who* pushed empty.
+    void logEmptyActionPush(const char *site) {
+        std::cerr << "[ActionQueue empty " << site << "]";
+        BattleContext *bc = g_debug_bc;
+        if (bc) {
+            std::cerr << " encounter=" << static_cast<int>(bc->encounter)
+                      << " turn=" << bc->turn
+                      << " monsterTurnIdx=" << static_cast<int>(bc->monsterTurnIdx)
+                      << " input=" << static_cast<int>(bc->inputState)
+                      << " loopCount=" << bc->loopCount
+                      << " monsterCount=" << static_cast<int>(bc->monsters.monsterCount)
+                      << " curCardId=" << static_cast<int>(bc->curCardQueueItem.card.id);
+            // Check the 4 known queueing sites for DebuffEnemy<POISON>:
+            std::cerr << " p_NOXIOUS_FUMES=" << bc->player.hasStatus<PlayerStatus::NOXIOUS_FUMES>()
+                      << " p_ENVENOM=" << bc->player.hasStatus<PlayerStatus::ENVENOM>()
+                      << " p_relic_TWISTED_FUNNEL=" << bc->player.hasRelic<RelicId::TWISTED_FUNNEL>()
+                      << " character=" << static_cast<int>(bc->player.cc);
+            for (int i = 0; i < bc->monsters.monsterCount; ++i) {
+                const auto &m = bc->monsters.arr[i];
+                std::cerr << " m" << i << "=(id=" << static_cast<int>(m.id)
+                          << " hp=" << m.curHp
+                          << " move=" << static_cast<int>(m.moveHistory[0])
+                          << " statusBits=" << std::hex << m.statusBits << std::dec
+                          << " poison=" << static_cast<int>(m.poison)
+                          << " weak=" << m.weak
+                          << " vuln=" << m.vulnerable
+                          << " strength=" << m.strength
+                          << " hasPOISON=" << m.hasStatus<MonsterStatus::POISON>()
+                          << " hasTHORNS=" << m.hasStatus<MonsterStatus::THORNS>()
+                          << " hasCURL_UP=" << m.hasStatus<MonsterStatus::CURL_UP>()
+                          << " hasMALLEABLE=" << m.hasStatus<MonsterStatus::MALLEABLE>()
+                          << " hasREACTIVE=" << m.hasStatus<MonsterStatus::REACTIVE>()
+                          << ")";
+            }
+        }
+        std::cerr << "\nbacktrace (push site):\n";
+        void *bt[16];
+        int n = backtrace(bt, 16);
+        backtrace_symbols_fd(bt, n, 2);
+
+        // Dump the captured POISON-set call stack (most recent
+        // transition into hasStatus<POISON>=true on this thread).
+        // Without DWARF symbolization the addresses are raw, but we
+        // can correlate offline with objdump / dwarfdump on the .o
+        // files in engine/build_py312/CMakeFiles/slaythespire.dir/.
+        std::cerr << "last POISON-set count=" << g_last_poison_set_count
+                  << " bt_frames=" << g_last_poison_set_bt_n << ":\n";
+        if (g_last_poison_set_bt_n > 0) {
+            backtrace_symbols_fd(g_last_poison_set_bt,
+                                 g_last_poison_set_bt_n, 2);
+        }
+    }
 }
 
 
@@ -52,6 +112,16 @@ void BattleContext::init(const GameContext &gc, MonsterEncounter encounterToInit
     potionCapacity = gc.potionCapacity;
     potions = gc.potions;
 
+    // Bugfix 2026-05-02: Player::cc was declared without a default
+    // initializer (Player.h:34) and was never written here. The
+    // resulting uninitialized field caused EntropicBrew to invoke
+    // PotionPool::getPotionForClass(cc=garbage, idx) which indexes
+    // out-of-bounds in potionPool[4][33], occasionally returning
+    // POISON_POTION for an Ironclad. The agent then drank the bogus
+    // potion → addToBot(DebuffEnemy<MS::POISON>) → monster gets
+    // poison → Monster::applyStartOfTurnPowers pushed the empty
+    // PoisonLoseHpAction stub → [BC empty actFunc] symptom.
+    player.cc = gc.cc;
     player.curHp = gc.curHp;
     player.maxHp = gc.maxHp;
     player.gold = gc.gold;
@@ -725,12 +795,27 @@ void BattleContext::executeActions() {
     ++sum;
     g_debug_bc = this;
 
+    // Per-call iteration budget. loopCount is reset each executeActions call
+    // so the cap fires only on true runaway loops within a single invocation,
+    // not on long but legitimate combats that accumulate actions across turns.
+    loopCount = 0;
+
     while (true)
     {
-        if (++loopCount > 100000 || monsters.monstersAlive < 0 || turn > 100) {
-            // Something went wrong — infinite loop from card combos like
-            // Corruption + Dead Branch + Havoc, or a turn count overflow.
-            // Treat as a player loss instead of crashing.
+        if (++loopCount > 10000 || monsters.monstersAlive < 0 || turn > 100) {
+            // Safety cap: cut off runaway action-queue loops quickly enough
+            // that the Python-level rollout timeout can fire.
+            // Prior cap of 100k could take minutes of CPU before tripping,
+            // during which the Python signal handler could not run.
+            std::cerr << "[BC safety cap] loopCount=" << loopCount
+                      << " turn=" << turn
+                      << " monstersAlive=" << monsters.monstersAlive
+                      << " aq_size=" << actionQueue.size
+                      << " cq_size=" << cardQueue.size
+                      << " encounter=" << static_cast<int>(encounter)
+                      << " player_hp=" << player.curHp
+                      << " player_energy=" << player.energy
+                      << "\n";
             outcome = Outcome::PLAYER_LOSS;
             break;
         }
@@ -746,6 +831,17 @@ void BattleContext::executeActions() {
         if (!actionQueue.isEmpty()) {
             // do a action
             auto a = std::move(actionQueue.popFront());
+            if (!a) {
+                std::cerr << "[BC empty actFunc] encounter=" << static_cast<int>(encounter)
+                          << " turn=" << turn
+                          << " aq_size=" << actionQueue.size
+                          << " cq_size=" << cardQueue.size
+                          << " loopCount=" << loopCount
+                          << " input=" << static_cast<int>(inputState)
+                          << " curCardId=" << static_cast<int>(curCardQueueItem.card.id) << "\n";
+                outcome = Outcome::PLAYER_LOSS;
+                break;
+            }
             a(*this);
             continue;
         }

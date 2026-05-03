@@ -8,7 +8,9 @@
 #include "sts_common.h"
 
 #include <bitset>
+#include <execinfo.h>
 #include <functional>
+#include <iostream>
 #include <cassert>
 
 
@@ -25,6 +27,13 @@ namespace sts {
         Action(ActionFunction a) : actFunc(std::move(a)) {}
         Action(ActionFunction a, bool b) : actFunc(std::move(a)), clearOnCombatVictory(b) {}
     };
+
+    // Diagnostic helper for the empty-actFunc bug. Invoked by ActionQueue
+    // push paths when a default-constructed Action() reaches them. Logs a
+    // C++ backtrace and current BattleContext context (via g_debug_bc) to
+    // identify the offending pusher, then refuses the push. See CLAUDE.md
+    // ("BC empty actFunc / ActionQueue empty push" section).
+    void logEmptyActionPush(const char *site);
 
 
     // Simple deque
@@ -72,6 +81,10 @@ namespace sts {
 #ifdef sts_asserts
         assert(size != capacity);
 #endif
+        if (!a.actFunc) {
+            logEmptyActionPush("pushFront");
+            return; // refuse the push
+        }
         --front;
         ++size;
         if (front < 0) {
@@ -88,6 +101,10 @@ namespace sts {
             assert(false);
         }
 #endif
+        if (!a.actFunc) {
+            logEmptyActionPush("pushBack");
+            return; // refuse the push
+        }
         if (back >= capacity) {
             back = 0;
         }

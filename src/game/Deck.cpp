@@ -175,8 +175,14 @@ void Deck::obtain(GameContext &gc, Card card, int count) {
         case CardType::STATUS:
         case CardType::INVALID:
         default:
-            assert(false);
-            break;
+            // MCTS can enumerate game actions that attempt to add STATUS /
+            // INVALID cards to the deck (e.g. from cloned card-reward states).
+            // Fall through silently rather than assert so the rollout
+            // continues. Returns without adding anything.
+            std::cerr << "[Deck::obtain] skip bad-type card type="
+                      << static_cast<int>(card.getType())
+                      << " id=" << static_cast<int>(card.getId()) << "\n";
+            return;
     }
 
 

@@ -400,12 +400,41 @@ void init_rl_bindings(py::module_ &m) {
     // ============================
     py::class_<BattleContext>(m, "BattleContext")
         .def(py::init<>())
+        .def(py::init<const BattleContext &>(), "copy constructor")
+        .def("__copy__", [](const BattleContext &bc) { return BattleContext(bc); })
+        .def("__deepcopy__", [](const BattleContext &bc, py::dict) { return BattleContext(bc); })
         .def("init", py::overload_cast<const GameContext&>(&BattleContext::init),
             "initialize battle from a GameContext that is in BATTLE screen state")
         .def("init", py::overload_cast<const GameContext&, MonsterEncounter>(&BattleContext::init),
             "initialize battle from a GameContext with a specific encounter")
         .def("exit_battle", &BattleContext::exitBattle,
             "transfer battle results back to the GameContext")
+
+        // Re-seed all combat RNGs from a single uint64 seed. Used between turns
+        // during MCTS rollouts so the search at turn N+1 cannot peek at the
+        // exact card draws / monster intent rolls already baked into the
+        // snapshot's RNG state. Each of the 6 Random objects gets a distinct
+        // derived seed (murmur(seed + i)) so reseeding once doesn't make them
+        // correlated.
+        .def("reseed_combat_rng", [](BattleContext &bc, std::uint64_t seed) {
+            auto mix = [](std::uint64_t x) -> std::uint64_t {
+                // 64-bit mixer (splitmix64-style); avoids zero output.
+                x += 0x9E3779B97F4A7C15ULL;
+                x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+                x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+                x ^= (x >> 31);
+                return x == 0 ? 1ULL : x;
+            };
+            bc.aiRng         = Random(mix(seed + 0));
+            bc.cardRandomRng = Random(mix(seed + 1));
+            bc.miscRng       = Random(mix(seed + 2));
+            bc.monsterHpRng  = Random(mix(seed + 3));
+            bc.potionRng     = Random(mix(seed + 4));
+            bc.shuffleRng    = Random(mix(seed + 5));
+        }, py::arg("seed"),
+        "Re-seed all 6 combat RNGs from a single uint64. Called between turns "
+        "during MCTS rollouts to prevent the search from looking at the "
+        "deterministic future drawn from the snapshot's RNG state.")
 
         // State
         .def_readonly("outcome", &BattleContext::outcome)
@@ -525,11 +554,11 @@ void init_rl_bindings(py::module_ &m) {
             return {};
         }, "enumerate all legal actions in the current battle state")
 
+        .def_readonly("loop_count", &BattleContext::loopCount)
+
         // Step: execute an action and advance to next decision point
         .def("step", [](BattleContext &bc, const search::Action &action) {
             action.execute(bc);
-            // After executing, the engine may need to process the action queue
-            // The execute() call handles this internally
         }, "execute a combat action")
 
         .def("__repr__", [](const BattleContext &bc) {

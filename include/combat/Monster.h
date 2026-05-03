@@ -11,6 +11,8 @@
 #include <game/Random.h>
 #include <bitset>
 #include <cassert>
+#include <execinfo.h>
+#include <iostream>
 
 #include "constants/MonsterStatusEffects.h"
 #include "constants/MonsterIds.h"
@@ -178,10 +180,26 @@ namespace sts {
 
     std::ostream& operator<<(std::ostream &os, const sts::Monster &m);
 
+    // TLS storage for the most recent POISON-bit-on transition. Cheap
+    // capture (just backtrace() into a static buffer, no I/O) so the
+    // hot path stays tight. Read-out happens in logEmptyActionPush.
+    extern thread_local void *g_last_poison_set_bt[24];
+    extern thread_local int g_last_poison_set_bt_n;
+    extern thread_local int g_last_poison_set_count;
+
     template <MonsterStatus s>
     void Monster::setHasStatus(bool value) {
         if (s == MS::STRENGTH) {
             return; // should not be called
+        }
+        // Capture the call stack of the FIRST POISON-bit transition
+        // (per worker process). The bug we're hunting is "monster has
+        // POISON in filtered Ironclad data — how?", and the answer is
+        // whoever calls this template specialization with s==POISON.
+        if (s == MS::POISON && value
+            && !(statusBits & (1ULL << (int)MS::POISON))) {
+            g_last_poison_set_bt_n = backtrace(g_last_poison_set_bt, 24);
+            ++g_last_poison_set_count;
         }
         if (value) {
             statusBits |= (1ULL << (int)s);

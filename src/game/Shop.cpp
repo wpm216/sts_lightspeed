@@ -158,9 +158,17 @@ void Shop::buyCardRemove(GameContext &gc) {
     removeCost = -1;
     ++gc.shopRemoveCount;
 
-    gc.regainControlAction = [=](GameContext &g) {
+    // Save the previous regainControlAction by value so we can restore it
+    // after the card-removal screen closes. The original code captured
+    // `gc` by reference and read `gc.regainControlAction` at invocation
+    // time — but by then the field had been overwritten with the lambda
+    // itself (self-reference), and after MCTS deepcopy the captured
+    // reference would dangle into the source GameContext. Capture by
+    // value: deepcopy of std::function works element-wise.
+    auto previousRegainControl = std::move(gc.regainControlAction);
+    gc.regainControlAction = [previousRegainControl = std::move(previousRegainControl)](GameContext &g) {
         g.screenState = ScreenState::SHOP_ROOM;
-        g.regainControlAction = gc.regainControlAction;
+        g.regainControlAction = previousRegainControl;
     };
 
     gc.openCardSelectScreen(CardSelectScreenType::REMOVE, 1);

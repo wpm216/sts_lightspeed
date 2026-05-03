@@ -543,7 +543,10 @@ void Player::applyStartOfTurnRelics(BattleContext &bc) {
     if (hasRelic<R::INSERTER>()) {
         if (++inserterCounter == 2) {
             inserterCounter = 0; // todo
-            bc.addToBot( {[=](BattleContext &bc) {
+            bc.addToBot( {[](BattleContext &bc) {
+                // No capture: this Action sits in the queue and the
+                // BattleContext gets deepcopied by MCTS; mustn't capture
+                // `this` (the Player whose method we're in).
                 bc.player.increaseOrbSlots(1);
             }});
         }

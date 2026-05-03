@@ -5,6 +5,9 @@
 #ifndef STS_LIGHTSPEED_RANDOM_H
 #define STS_LIGHTSPEED_RANDOM_H
 
+#include <cstdio>
+#include <cstdint>
+
 namespace java {
 
     class Random {
@@ -83,6 +86,19 @@ namespace sts {
         }
 
         std::uint64_t nextLong() {
+            // Guard against the degenerate (0,0) absorbing state. A valid
+            // XorShift can never reach it from a nonzero state, so if we see
+            // it, something zeroed the seeds (e.g. uninitialized struct
+            // member copied around by pybind). Re-seed from ONE_IN_MOST_SIGNIFICANT
+            // and log the occurrence so we can hunt the upstream source.
+            if (seed0 == 0 && seed1 == 0) {
+                static int n_warned = 0;
+                if (n_warned++ < 20) {
+                    fprintf(stderr, "[Random::nextLong] degenerate (0,0) seed observed; reseeding. counter=%d\n", counter);
+                }
+                seed0 = murmurHash3(ONE_IN_MOST_SIGNIFICANT);
+                seed1 = murmurHash3(seed0);
+            }
             std::uint64_t s1 = seed0;
             std::uint64_t s0 = seed1;
             seed0 = s0;

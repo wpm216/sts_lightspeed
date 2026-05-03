@@ -15,6 +15,8 @@
 #include "sim/SimHelpers.h"
 #include "sim/PrintHelpers.h"
 #include "game/Game.h"
+#include "game/Neow.h"
+#include "game/Random.h"
 
 #include "slaythespire.h"
 
@@ -46,6 +48,9 @@ PYBIND11_MODULE(slaythespire, m) {
 
     pybind11::class_<GameContext> gameContext(m, "GameContext");
     gameContext.def(pybind11::init<CharacterClass, std::uint64_t, int>())
+        .def(pybind11::init<const GameContext &>(), "copy constructor")
+        .def("__copy__", [](const GameContext &gc) { return GameContext(gc); })
+        .def("__deepcopy__", [](const GameContext &gc, pybind11::dict) { return GameContext(gc); })
         .def("pick_reward_card", &sts::py::pickRewardCard, "choose to obtain the card at the specified index in the card reward list")
         .def("skip_reward_cards", &sts::py::skipRewardCards, "choose to skip the card reward (increases max_hp by 2 with singing bowl)")
         .def("get_card_reward", &sts::py::getCardReward, "return the current card reward list")
@@ -78,8 +83,14 @@ PYBIND11_MODULE(slaythespire, m) {
             return oss.str();
         }, "returns a string representation of the GameContext");
 
+    gameContext.def_property_readonly("neow_rewards", [](const GameContext &gc) {
+        std::vector<std::pair<Neow::Bonus, Neow::Drawback>> out;
+        for (const auto &o : gc.info.neowRewards) out.emplace_back(o.r, o.d);
+        return out;
+    });
     gameContext.def_readwrite("outcome", &GameContext::outcome)
         .def_readwrite("act", &GameContext::act)
+        .def_readwrite("ascension", &GameContext::ascension)
         .def_readwrite("floor_num", &GameContext::floorNum)
         .def_readwrite("screen_state", &GameContext::screenState)
 
@@ -123,9 +134,53 @@ PYBIND11_MODULE(slaythespire, m) {
     map.def("get_room_type", &sts::py::getRoomType);
     map.def("has_edge", &sts::py::hasEdge);
     map.def("get_nn_rep", &sts::py::getNNMapRepresentation);
+    map.def_readonly("burning_elite_x", &Map::burningEliteX);
+    map.def_readonly("burning_elite_y", &Map::burningEliteY);
+    map.def_readonly("burning_elite_buff", &Map::burningEliteBuff);
     map.def("__repr__", [](const Map &m) {
         return m.toString(true);
     });
+
+    pybind11::enum_<Neow::Bonus>(m, "NeowBonus")
+        .value("THREE_CARDS", Neow::Bonus::THREE_CARDS)
+        .value("ONE_RANDOM_RARE_CARD", Neow::Bonus::ONE_RANDOM_RARE_CARD)
+        .value("REMOVE_CARD", Neow::Bonus::REMOVE_CARD)
+        .value("UPGRADE_CARD", Neow::Bonus::UPGRADE_CARD)
+        .value("TRANSFORM_CARD", Neow::Bonus::TRANSFORM_CARD)
+        .value("RANDOM_COLORLESS", Neow::Bonus::RANDOM_COLORLESS)
+        .value("THREE_SMALL_POTIONS", Neow::Bonus::THREE_SMALL_POTIONS)
+        .value("RANDOM_COMMON_RELIC", Neow::Bonus::RANDOM_COMMON_RELIC)
+        .value("TEN_PERCENT_HP_BONUS", Neow::Bonus::TEN_PERCENT_HP_BONUS)
+        .value("THREE_ENEMY_KILL", Neow::Bonus::THREE_ENEMY_KILL)
+        .value("HUNDRED_GOLD", Neow::Bonus::HUNDRED_GOLD)
+        .value("RANDOM_COLORLESS_2", Neow::Bonus::RANDOM_COLORLESS_2)
+        .value("REMOVE_TWO", Neow::Bonus::REMOVE_TWO)
+        .value("ONE_RARE_RELIC", Neow::Bonus::ONE_RARE_RELIC)
+        .value("THREE_RARE_CARDS", Neow::Bonus::THREE_RARE_CARDS)
+        .value("TWO_FIFTY_GOLD", Neow::Bonus::TWO_FIFTY_GOLD)
+        .value("TRANSFORM_TWO_CARDS", Neow::Bonus::TRANSFORM_TWO_CARDS)
+        .value("TWENTY_PERCENT_HP_BONUS", Neow::Bonus::TWENTY_PERCENT_HP_BONUS)
+        .value("BOSS_RELIC", Neow::Bonus::BOSS_RELIC)
+        .value("INVALID", Neow::Bonus::INVALID);
+
+    pybind11::enum_<Neow::Drawback>(m, "NeowDrawback")
+        .value("INVALID", Neow::Drawback::INVALID)
+        .value("NONE", Neow::Drawback::NONE)
+        .value("TEN_PERCENT_HP_LOSS", Neow::Drawback::TEN_PERCENT_HP_LOSS)
+        .value("NO_GOLD", Neow::Drawback::NO_GOLD)
+        .value("CURSE", Neow::Drawback::CURSE)
+        .value("PERCENT_DAMAGE", Neow::Drawback::PERCENT_DAMAGE)
+        .value("LOSE_STARTER_RELIC", Neow::Drawback::LOSE_STARTER_RELIC);
+
+    m.def("get_neow_options", [](std::uint64_t seed) {
+        Random rng(seed);
+        auto options = Neow::getOptions(rng);
+        std::vector<std::pair<Neow::Bonus, Neow::Drawback>> out;
+        out.reserve(4);
+        for (const auto &o : options) out.emplace_back(o.r, o.d);
+        return out;
+    }, pybind11::arg("seed"),
+       "Return the 4 (bonus, drawback) Neow options for a given run seed.");
 
     pybind11::class_<Card> card(m, "Card");
     card.def(pybind11::init<CardId>())

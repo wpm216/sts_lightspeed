@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <execinfo.h>
 
 #include "constants/RelicPools.h"
 #include "constants/CardPools.h"
@@ -1096,8 +1097,10 @@ void GameContext::enterBossTreasureRoom() {
         info.bossRelics[i] = returnRandomRelic(RelicTier::BOSS);
     }
 
-    regainControlAction = [=](GameContext &gc) {
-        gc.transitionToAct(act+1);
+    const int nextAct = act + 1;
+    regainControlAction = [nextAct](GameContext &gc) {
+        // Bugfix: capture `act` by value, not `this` (see 2654 note).
+        gc.transitionToAct(nextAct);
     };
 }
 
@@ -1143,7 +1146,9 @@ void GameContext::afterBattle() {
 
         case Room::BOSS:
             if (act == 1 || act == 2) {
-                regainControlAction = [=](GameContext &gc) {
+                regainControlAction = [](GameContext &gc) {
+                    // No capture: this lambda persists across MCTS
+                    // deepcopies, so it must not capture `this`.
                     gc.enterBossTreasureRoom();
                 };
                 openCombatRewardScreen(createBossCombatReward());
@@ -1775,6 +1780,29 @@ void GameContext::addPotionRewards(Rewards &r) {
 }
 
 CardReward GameContext::createCardReward(Room room) {
+    // Instrumentation: if cardRng is in the degenerate (0,0) state, log the
+    // surrounding context + C++ backtrace so we can tell where this
+    // improperly-initialized GameContext came from.
+    if (cardRng.seed0 == 0 && cardRng.seed1 == 0) {
+        fprintf(stderr,
+            "[createCardReward DIAG] gc.cardRng=(0,0)! this=%p "
+            "gc.seed=%llu floor=%d act=%d "
+            "aiRng=(%llu,%llu) eventRng=(%llu,%llu) miscRng=(%llu,%llu) "
+            "neowRng=(%llu,%llu) monsterHpRng=(%llu,%llu)\n",
+            (void *)this,
+            (unsigned long long)seed, floorNum, act,
+            (unsigned long long)aiRng.seed0, (unsigned long long)aiRng.seed1,
+            (unsigned long long)eventRng.seed0, (unsigned long long)eventRng.seed1,
+            (unsigned long long)miscRng.seed0, (unsigned long long)miscRng.seed1,
+            (unsigned long long)neowRng.seed0, (unsigned long long)neowRng.seed1,
+            (unsigned long long)monsterHpRng.seed0, (unsigned long long)monsterHpRng.seed1);
+        // C++ backtrace for this call site
+        void *bt[32];
+        int n = backtrace(bt, 32);
+        fprintf(stderr, "[createCardReward DIAG] backtrace (%d frames):\n", n);
+        backtrace_symbols_fd(bt, n, 2);  // write to stderr fd
+    }
+
     int numCards = 3;
     if (relics.has(RelicId::QUESTION_CARD)) {
         numCards += 1;
@@ -1805,6 +1833,7 @@ CardReward GameContext::createCardReward(Room room) {
 
         CardId id;
         bool hasDuplicate = true;
+        int tries = 0;
         while (hasDuplicate) {
 
             if (hasRelic(RelicId::PRISMATIC_SHARD) && !disablePrismaticShard) {
@@ -1819,6 +1848,16 @@ CardReward GameContext::createCardReward(Room room) {
                     hasDuplicate = true;
                     break;
                 }
+            }
+            // Retry cap: if the RNG is degenerate (e.g. stuck at seed0=seed1=0
+            // returning the same card forever), bail out instead of looping
+            // forever. Accept the duplicate — the caller handles it.
+            if (++tries > 1000) {
+                std::cerr << "[createCardReward] retry cap hit, rng seeds may be degenerate. "
+                          << "room=" << static_cast<int>(room)
+                          << " rarity=" << static_cast<int>(rarity)
+                          << " i=" << i << "\n";
+                break;
             }
         }
         cards[i] = id;
@@ -2616,14 +2655,18 @@ void GameContext::chooseEventOption(int idx) {
                         }
                     }
 
-                    regainControlAction = [=](GameContext &gc) {
+                    regainControlAction = [goldAmt, addRelic, combatRewardRelic](GameContext &gc) {
+                        // Bugfix: lambda must use `gc.` for all member accesses.
+                        // `[=]` inside a member function captures `this` by
+                        // pointer, which dangles once the containing GC is
+                        // deep-copied (e.g. by MCTS snapshot/restore).
                         Rewards reward;
                         reward.addGold(goldAmt);
                         if (addRelic) {
                             reward.addRelic(combatRewardRelic);
                         }
-                        reward.addCardReward(createCardReward(Room::EVENT));
-                        addPotionRewards(reward);
+                        reward.addCardReward(gc.createCardReward(Room::EVENT));
+                        gc.addPotionRewards(reward);
                         gc.openCombatRewardScreen(reward);
                         gc.regainControlAction = returnToMapAction;
                     };
@@ -2678,8 +2721,9 @@ void GameContext::chooseEventOption(int idx) {
 
                 case 4:
                     loseGold(unfavorable ? 110 : 90);
-                    regainControlAction = [=](GameContext &gc) {
-                        gc.deck.upgradeRandomCards(miscRng, 1);
+                    regainControlAction = [](GameContext &gc) {
+                        // Bugfix: must use `gc.` not implicit this-> (see 2654 note).
+                        gc.deck.upgradeRandomCards(gc.miscRng, 1);
                         returnToMapAction(gc);
                     };
                     openCardSelectScreen(CardSelectScreenType::REMOVE, 1);
@@ -3024,11 +3068,12 @@ void GameContext::chooseEventOption(int idx) {
 
                     const int goldAmt = unfavorable ? 25 : 50;
                     const RelicId rareRelic = returnRandomRelic(RelicTier::RARE);
-                    regainControlAction = [=](GameContext &gc) {
+                    regainControlAction = [goldAmt, rareRelic](GameContext &gc) {
+                        // Bugfix: must use `gc.` not bare `this->` (see 2654 note).
                         Rewards reward;
                         reward.addGold(goldAmt);
                         reward.addRelic(rareRelic);
-                        addPotionRewards(reward);
+                        gc.addPotionRewards(reward);
                         reward.addCardReward(gc.createCardReward(Room::EVENT));
                         gc.openCombatRewardScreen(reward);
                         gc.regainControlAction = returnToMapAction;
@@ -3069,12 +3114,13 @@ void GameContext::chooseEventOption(int idx) {
         case Event::HYPNOTIZING_COLORED_MUSHROOMS: {
             if (idx == 0) {
                 const int goldAmt = miscRng.random(20, 30);
-                regainControlAction = [=](GameContext &gc) {
+                regainControlAction = [goldAmt](GameContext &gc) {
+                    // Bugfix: must use `gc.` not bare `this->` (see 2654 note).
                     Rewards reward;
                     reward.addGold(goldAmt);
                     reward.addRelic(RelicId::ODD_MUSHROOM);
-                    addPotionRewards(reward);
-                    reward.addCardReward(createCardReward(Room::EVENT));
+                    gc.addPotionRewards(reward);
+                    reward.addCardReward(gc.createCardReward(Room::EVENT));
                     gc.openCombatRewardScreen(reward);
                     gc.regainControlAction = returnToMapAction;
                 };
@@ -3096,7 +3142,8 @@ void GameContext::chooseEventOption(int idx) {
                 const RelicId rareRelic = returnRandomScreenlessRelic(RelicTier::RARE);
                 info.bossRelics[0] = rareRelic;
                 info.gold = goldAmt;
-                regainControlAction = [=](GameContext &gc) {
+                regainControlAction = [](GameContext &gc) {
+                    // No capture: must survive MCTS deepcopy.
                     gc.afterBattle();
                 };
                 enterBattle(MonsterEncounter::MYSTERIOUS_SPHERE_EVENT);
