@@ -17,6 +17,8 @@
 #include "combat/CardManager.h"
 #include "combat/Monster.h"
 #include "combat/MonsterGroup.h"
+#include "constants/MonsterStatusEffects.h"
+#include "constants/Events.h"
 #include "combat/Player.h"
 #include "combat/InputState.h"
 #include "game/GameContext.h"
@@ -228,6 +230,21 @@ void init_rl_bindings(py::module_ &m) {
         .def_property_readonly("move_id_int", [](const Monster &m) -> int {
             return static_cast<int>(m.moveHistory[0]);
         }, "current move as integer (MonsterMoveId enum value)")
+        .def_property_readonly("prev_move_id_int", [](const Monster &m) -> int {
+            return static_cast<int>(m.moveHistory[1]);
+        }, "previous move as integer (MonsterMoveId enum value)")
+        .def_readonly("misc_info", &Monster::miscInfo,
+            "monster-specific integer (mode shift threshold, phase-2 flag, etc.)")
+        .def_readonly("unique_power_0", &Monster::uniquePower0,
+            "raw unique-power-0 value (semantics depend on monster type)")
+        .def_readonly("unique_power_1", &Monster::uniquePower1,
+            "raw unique-power-1 value (semantics depend on monster type)")
+        .def("has_status", [](const Monster &m, MonsterStatus s) {
+            return m.hasStatusInternal(s);
+        }, "check if monster has a status effect")
+        .def("get_status", [](const Monster &m, MonsterStatus s) {
+            return m.getStatusInternal(s);
+        }, "get the value of a monster status effect (0 if absent)")
         .def("__repr__", [](const Monster &m) {
             std::string s("<Monster ");
             s += m.getName();
@@ -305,6 +322,51 @@ void init_rl_bindings(py::module_ &m) {
         .value("PEN_NIB", PlayerStatus::PEN_NIB)
         .value("CONFUSED", PlayerStatus::CONFUSED)
         .value("HEX", PlayerStatus::HEX);
+
+    // MonsterStatus enum - all values from MonsterStatusEffects.h
+    py::enum_<MonsterStatus>(m, "MonsterStatus")
+        .value("ARTIFACT", MonsterStatus::ARTIFACT)
+        .value("BLOCK_RETURN", MonsterStatus::BLOCK_RETURN)
+        .value("CHOKED", MonsterStatus::CHOKED)
+        .value("CORPSE_EXPLOSION", MonsterStatus::CORPSE_EXPLOSION)
+        .value("LOCK_ON", MonsterStatus::LOCK_ON)
+        .value("MARK", MonsterStatus::MARK)
+        .value("METALLICIZE", MonsterStatus::METALLICIZE)
+        .value("PLATED_ARMOR", MonsterStatus::PLATED_ARMOR)
+        .value("POISON", MonsterStatus::POISON)
+        .value("REGEN", MonsterStatus::REGEN)
+        .value("SHACKLED", MonsterStatus::SHACKLED)
+        .value("STRENGTH", MonsterStatus::STRENGTH)
+        .value("VULNERABLE", MonsterStatus::VULNERABLE)
+        .value("WEAK", MonsterStatus::WEAK)
+        .value("ANGRY", MonsterStatus::ANGRY)
+        .value("BEAT_OF_DEATH", MonsterStatus::BEAT_OF_DEATH)
+        .value("CURIOSITY", MonsterStatus::CURIOSITY)
+        .value("CURL_UP", MonsterStatus::CURL_UP)
+        .value("ENRAGE", MonsterStatus::ENRAGE)
+        .value("FADING", MonsterStatus::FADING)
+        .value("FLIGHT", MonsterStatus::FLIGHT)
+        .value("GENERIC_STRENGTH_UP", MonsterStatus::GENERIC_STRENGTH_UP)
+        .value("INTANGIBLE", MonsterStatus::INTANGIBLE)
+        .value("MALLEABLE", MonsterStatus::MALLEABLE)
+        .value("MODE_SHIFT", MonsterStatus::MODE_SHIFT)
+        .value("RITUAL", MonsterStatus::RITUAL)
+        .value("SLOW", MonsterStatus::SLOW)
+        .value("SPORE_CLOUD", MonsterStatus::SPORE_CLOUD)
+        .value("THIEVERY", MonsterStatus::THIEVERY)
+        .value("THORNS", MonsterStatus::THORNS)
+        .value("TIME_WARP", MonsterStatus::TIME_WARP)
+        .value("INVINCIBLE", MonsterStatus::INVINCIBLE)
+        .value("REACTIVE", MonsterStatus::REACTIVE)
+        .value("SHARP_HIDE", MonsterStatus::SHARP_HIDE)
+        .value("ASLEEP", MonsterStatus::ASLEEP)
+        .value("BARRICADE", MonsterStatus::BARRICADE)
+        .value("MINION", MonsterStatus::MINION)
+        .value("MINION_LEADER", MonsterStatus::MINION_LEADER)
+        .value("PAINFUL_STABS", MonsterStatus::PAINFUL_STABS)
+        .value("REGROW", MonsterStatus::REGROW)
+        .value("SHIFTING", MonsterStatus::SHIFTING)
+        .value("STASIS", MonsterStatus::STASIS);
 
     // ============================
     // Combat Action (search::Action)
