@@ -7,6 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
+#include <pybind11/numpy.h>
 
 #include <sstream>
 #include <algorithm>
@@ -245,6 +246,22 @@ void init_rl_bindings(py::module_ &m) {
         .def("get_status", [](const Monster &m, MonsterStatus s) {
             return m.getStatusInternal(s);
         }, "get the value of a monster status effect (0 if absent)")
+        .def("status_vec", [](const Monster &m, py::array_t<int> status_ids) {
+            // Batched getStatusInternal — one Python→C++ crossing for all N
+            // queries. Caller passes a numpy int array of MonsterStatus enum
+            // values (in any order); we return a float32 array of the same
+            // length where out[i] = getStatusInternal(status_ids[i]) cast to
+            // float. Boolean normalization is the caller's job.
+            auto in = status_ids.unchecked<1>();
+            py::array_t<float> out(in.shape(0));
+            auto out_buf = out.mutable_unchecked<1>();
+            for (ssize_t i = 0; i < in.shape(0); i++) {
+                auto s = static_cast<MonsterStatus>(in(i));
+                out_buf(i) = static_cast<float>(m.getStatusInternal(s));
+            }
+            return out;
+        }, py::arg("status_ids"),
+           "batched getStatusInternal — returns float32 vector of raw stack/flag values")
         .def("__repr__", [](const Monster &m) {
             std::string s("<Monster ");
             s += m.getName();
@@ -285,7 +302,25 @@ void init_rl_bindings(py::module_ &m) {
         }, "get the value of a player status effect")
         .def("has_status", [](const Player &p, PlayerStatus s) {
             return p.statusMap.find(s) != p.statusMap.end() && p.statusMap.at(s) != 0;
-        }, "check if player has a status effect");
+        }, "check if player has a status effect")
+        .def("status_vec", [](const Player &p, py::array_t<int> status_ids) {
+            // Batched player-status query — one Python→C++ crossing for all N
+            // queries. Caller passes a numpy int array of PlayerStatus enum
+            // values; we return a float32 array where out[i] is the stack
+            // value (or 0 if absent).
+            auto in = status_ids.unchecked<1>();
+            py::array_t<float> out(in.shape(0));
+            auto out_buf = out.mutable_unchecked<1>();
+            for (ssize_t i = 0; i < in.shape(0); i++) {
+                auto s = static_cast<PlayerStatus>(in(i));
+                auto it = p.statusMap.find(s);
+                out_buf(i) = (it != p.statusMap.end())
+                                 ? static_cast<float>(it->second)
+                                 : 0.0f;
+            }
+            return out;
+        }, py::arg("status_ids"),
+           "batched player status query — returns float32 vector of raw stack values");
 
     // PlayerStatus enum (partial - key statuses)
     py::enum_<PlayerStatus>(m, "PlayerStatus")
@@ -533,6 +568,51 @@ void init_rl_bindings(py::module_ &m) {
         })
 
         // Cards
+        .def("get_pile_token_array",
+             [](const BattleContext &bc, int pile_id,
+                py::array_t<int64_t> token_table, int max_size) {
+            // Returns a numpy int64 array of size `max_size` where out[i] is
+            // the network's card-token ID for pile entry i (0 = padding when
+            // the pile is shorter than max_size or the card isn't in the
+            // whitelist). Eliminates the Python `_encode_card_pile` loop:
+            // C++ does one walk and looks up tokens via the pre-built table.
+            //
+            // pile_id: 0=hand, 1=draw, 2=discard, 3=exhaust
+            // token_table: flat int64[NUM_CARD_IDS * 2]; index = card_id*2 + upgraded.
+            //              Caller builds it once at module load from CARD_TO_IDX.
+            py::array_t<int64_t> out(max_size);
+            auto out_buf = out.mutable_unchecked<1>();
+            for (int i = 0; i < max_size; i++) out_buf(i) = 0;
+            auto tt = token_table.unchecked<1>();
+            ssize_t tt_size = tt.shape(0);
+
+            auto fill = [&](auto it, auto end) {
+                ssize_t i = 0;
+                for (; it != end && i < (ssize_t)max_size; ++it, ++i) {
+                    int cid = static_cast<int>(it->id);
+                    int idx = cid * 2 + (it->upgraded ? 1 : 0);
+                    if (idx >= 0 && idx < tt_size) {
+                        out_buf(i) = tt(idx);
+                    }
+                }
+            };
+
+            switch (pile_id) {
+                case 0: fill(bc.cards.hand.begin(),
+                             bc.cards.hand.begin() + bc.cards.cardsInHand); break;
+                case 1: fill(bc.cards.drawPile.begin(), bc.cards.drawPile.end()); break;
+                case 2: fill(bc.cards.discardPile.begin(),
+                             bc.cards.discardPile.end()); break;
+                case 3: fill(bc.cards.exhaustPile.begin(),
+                             bc.cards.exhaustPile.end()); break;
+                default:
+                    throw std::invalid_argument(
+                        "pile_id must be 0=hand, 1=draw, 2=discard, 3=exhaust");
+            }
+            return out;
+        }, py::arg("pile_id"), py::arg("token_table"), py::arg("max_size"),
+           "Vectorized pile encoding: returns int64[max_size] of network tokens.")
+
         .def_property_readonly("hand", [](const BattleContext &bc) {
             return std::vector<CardInstance>(bc.cards.hand.begin(), bc.cards.hand.begin() + bc.cards.cardsInHand);
         })
