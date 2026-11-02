@@ -45,6 +45,14 @@ namespace sts {
         int strikeCount = 0;
         int handBloodCardCount = 0;
         int drawPileBloodCardCount = 0;
+
+        // How many cards at the top of drawPile the player legitimately knows the
+        // position of (placed there by Warcry, Headbutt or rebound). Only used by
+        // the RL bindings to resample hidden draw order for search. Conservative:
+        // a random insertion clears everything but the top card, because the
+        // player can't see where it landed. Bottom placement (Forethought) isn't
+        // tracked, so that card is treated as hidden.
+        int knownDrawTopCount = 0;
         int discardPileBloodCardCount = 0;
 
         void init(const GameContext &gc, BattleContext &bc); // returns count of innate cards

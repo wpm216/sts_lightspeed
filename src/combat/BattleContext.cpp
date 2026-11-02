@@ -2091,6 +2091,7 @@ void BattleContext::onAfterUseCard() {
 
         if (rebound) { // these methods all call resetCardBeforeMoving but it looks unnecessary
             cards.moveToDrawPileTop(c);
+            ++cards.knownDrawTopCount;
 
         } else if (c.id == CardId::TANTRUM) {
             cards.shuffleIntoDrawPile(cardRandomRng, c);
@@ -3135,6 +3136,7 @@ void BattleContext::chooseHeadbuttCard(int discardIdx) {
     assert(discardIdx >= 0 && discardIdx < cards.discardPile.size());
 #endif
     cards.moveToDrawPileTop(cards.discardPile[discardIdx]);
+    ++cards.knownDrawTopCount;
     cards.removeFromDiscard(discardIdx);
 }
 
@@ -3147,6 +3149,7 @@ void BattleContext::chooseWarcryCard(int handIdx) {
     assert(handIdx >= 0 && handIdx < cards.cardsInHand);
 #endif
     cards.moveToDrawPileTop(cards.hand[handIdx]);
+    ++cards.knownDrawTopCount;
     cards.removeFromHandAtIdx(handIdx);
 }
 

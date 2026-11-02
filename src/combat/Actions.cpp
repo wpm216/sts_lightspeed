@@ -194,6 +194,7 @@ Action Actions::EmptyDeckShuffle() {
 
 Action Actions::ShuffleDrawPile() {
     return {[=] (BattleContext &bc) {
+        bc.cards.knownDrawTopCount = 0;
         java::Collections::shuffle(
                 bc.cards.drawPile.begin(),
                 bc.cards.drawPile.end(),
