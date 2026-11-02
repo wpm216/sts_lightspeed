@@ -529,9 +529,50 @@ void init_rl_bindings(py::module_ &m) {
             bc.potionRng     = Random(mix(seed + 4));
             bc.shuffleRng    = Random(mix(seed + 5));
         }, py::arg("seed"),
-        "Re-seed all 6 combat RNGs from a single uint64. Called between turns "
-        "during MCTS rollouts to prevent the search from looking at the "
-        "deterministic future drawn from the snapshot's RNG state.")
+        "Re-seed all 6 combat RNGs from a single uint64. Changes future random "
+        "outcomes only: it does NOT reorder the draw pile, so upcoming draws stay "
+        "the real ones until the pile next reshuffles. Hiding hidden information "
+        "from search also needs resample_hidden_draw_order, and the committed move "
+        "must not share the sampled state.")
+        // Fisher-Yates over the part of the draw pile the player can't see the
+        // order of. Index meaning has to survive so search on the sampled state
+        // can act on the real one, which rules out reordering while a select that
+        // indexes the draw pile is open. Frozen Eye shows the real order.
+        .def("resample_hidden_draw_order", [](BattleContext &bc, std::uint64_t seed) -> int {
+            if (bc.player.hasRelicRuntime(RelicId::FROZEN_EYE)) {
+                return 0;
+            }
+            if (bc.inputState == InputState::CARD_SELECT) {
+                const auto task = bc.cardSelectInfo.cardSelectTask;
+                if (task == CardSelectTask::SECRET_TECHNIQUE
+                    || task == CardSelectTask::SECRET_WEAPON
+                    || task == CardSelectTask::SEEK) {
+                    return 0;
+                }
+            }
+            auto &pile = bc.cards.drawPile;
+            const int hidden = static_cast<int>(pile.size()) - bc.cards.knownDrawTopCount;
+            std::uint64_t st = seed;
+            for (int i = hidden - 1; i > 0; --i) {
+                st += 0x9E3779B97F4A7C15ULL;
+                std::uint64_t z = st;
+                z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+                z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+                z ^= (z >> 31);
+                const int j = static_cast<int>(z % static_cast<std::uint64_t>(i + 1));
+                CardInstance tmp = pile[i];
+                pile[i] = pile[j];
+                pile[j] = tmp;
+            }
+            return std::max(hidden, 0);
+        }, py::arg("seed"),
+        "Shuffle the draw-pile cards whose position the player doesn't know, in "
+        "place, leaving known top cards (Warcry, Headbutt, rebound) where they are. "
+        "Does not touch the RNGs. Returns how many cards were eligible; 0 under "
+        "Frozen Eye or while a draw-pile-indexed card select is open.")
+        .def_property_readonly("known_draw_top_count", [](const BattleContext &bc) {
+            return bc.cards.knownDrawTopCount;
+        }, "Number of top draw-pile cards whose position the player legitimately knows.")
 
         // State
         .def_readonly("outcome", &BattleContext::outcome)

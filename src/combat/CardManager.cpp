@@ -100,6 +100,7 @@ void CardManager::createTempCardInDrawPile(int idx, CardInstance c) {
     notifyAddCardToCombat(c);
     notifyAddToDrawPile(c);
     drawPile.insert(drawPile.begin()+idx, c);
+    knownDrawTopCount = std::min(knownDrawTopCount, 1); // random insert can't land on top
 }
 
 void CardManager::createTempCardInDiscard(CardInstance c) {
@@ -135,11 +136,17 @@ void CardManager::createTempCardInHand(CardInstance c) {
 // **************** START Remove Methods ****************
 
 void CardManager::removeFromDrawPileAtIdx(int idx) {
+    if (idx >= static_cast<int>(drawPile.size()) - knownDrawTopCount) {
+        --knownDrawTopCount;
+    }
     notifyRemoveFromDrawPile(drawPile[idx]);
     drawPile.erase(drawPile.begin()+idx);
 }
 
 CardInstance CardManager::popFromDrawPile() {
+    if (knownDrawTopCount > 0) {
+        --knownDrawTopCount;
+    }
     auto c = drawPile.back();
     notifyRemoveFromDrawPile(c);
     drawPile.pop_back();
@@ -220,6 +227,7 @@ void CardManager::shuffleIntoDrawPile(Random &cardRandomRng, const CardInstance 
     } else {
         int idx = cardRandomRng.random(static_cast<int>(drawPile.size()-1));
         insertToDrawPile(idx, c);
+        knownDrawTopCount = std::min(knownDrawTopCount, 1); // random insert can't land on top
     }
 }
 
@@ -238,6 +246,7 @@ void CardManager::moveToDiscardPile(const CardInstance &c) {
 }
 
 void CardManager::moveDiscardPileIntoToDrawPile() {
+    knownDrawTopCount = 0; // the discard pile comes in with an unknown order
     if (drawPile.empty()) {
         drawPileBloodCardCount = discardPileBloodCardCount;
         drawPile = discardPile;
