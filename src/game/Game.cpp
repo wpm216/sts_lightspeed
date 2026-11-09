@@ -308,7 +308,8 @@ Potion sts::returnRandomPotion(Random &potionRng, CharacterClass cc, bool limite
 
 Potion sts::returnRandomPotionOfRarity(Random &potionRng, PotionRarity rarity, CharacterClass cc, bool limited) {
     // Build a filtered list of potions matching the target rarity,
-    // excluding Fruit Juice when limited (EntropicBrew).
+    // excluding Fruit Juice and Entropic Brew itself when limited (EntropicBrew),
+    // since a self-refill lets one brew be drunk forever.
     // This replaces the original rejection-sampling loop which could
     // spin indefinitely with certain RNG states.
     Potion candidates[PotionPool::poolSize];
@@ -316,7 +317,7 @@ Potion sts::returnRandomPotionOfRarity(Random &potionRng, PotionRarity rarity, C
     for (int i = 0; i < PotionPool::poolSize; ++i) {
         Potion p = PotionPool::getPotionForClass(cc, i);
         if (potionRarities[static_cast<int>(p)] != rarity) continue;
-        if (limited && p == Potion::FRUIT_JUICE) continue;
+        if (limited && (p == Potion::FRUIT_JUICE || p == Potion::ENTROPIC_BREW)) continue;
         candidates[count++] = p;
     }
     if (count == 0) {
