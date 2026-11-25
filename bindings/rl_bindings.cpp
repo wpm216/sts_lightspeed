@@ -574,6 +574,35 @@ void init_rl_bindings(py::module_ &m) {
             return bc.cards.knownDrawTopCount;
         }, "Number of top draw-pile cards whose position the player legitimately knows.")
 
+        // Which card select is pending, and what it offers. input_state only
+        // says *a* select is open; search needs to tell a Discovery apart from
+        // the Forethought / Secret Technique selects its cards open, or they
+        // share a transposition-table node. Only meaningful while
+        // input_state == CARD_SELECT: cardSelectInfo is stale afterwards.
+        .def("card_select_task", [](const BattleContext &bc) -> std::string {
+            const int t = static_cast<int>(bc.cardSelectInfo.cardSelectTask);
+            constexpr int n = static_cast<int>(sizeof(cardSelectTaskStrings) / sizeof(cardSelectTaskStrings[0]));
+            if (t < 0 || t >= n) {
+                return "INVALID";
+            }
+            return cardSelectTaskStrings[t];
+        }, "Name of the pending card-select task (e.g. 'DISCOVERY', 'FORETHOUGHT'). "
+           "Only meaningful while input_state == CARD_SELECT.")
+        .def("card_select_cards", [](const BattleContext &bc) -> std::vector<int> {
+            std::vector<int> out;
+            const auto task = bc.cardSelectInfo.cardSelectTask;
+            // Only Discovery and Codex fill cardSelectInfo.cards; for every
+            // other task the array holds leftovers from an earlier select.
+            if (task == CardSelectTask::DISCOVERY || task == CardSelectTask::CODEX) {
+                for (const auto c : bc.cardSelectInfo.cards) {
+                    out.push_back(static_cast<int>(c));
+                }
+            }
+            return out;
+        }, "CardId ints offered by the pending Discovery / Codex select; empty for "
+           "selects that pick from hand or piles. Only meaningful while "
+           "input_state == CARD_SELECT.")
+
         // State
         .def_readonly("outcome", &BattleContext::outcome)
         .def_readonly("input_state", &BattleContext::inputState)
@@ -705,10 +734,17 @@ void init_rl_bindings(py::module_ &m) {
                     }
                 }
 
-                // Enumerate potions
+                // Enumerate potions: single-target potions get one action per
+                // targetable enemy; untargeted potions get exactly one action
+                // (target 0), regardless of enemy count. Emitting one per enemy
+                // for untargeted potions splits search visits across
+                // equivalent moves on multi-enemy fights.
                 for (int i = 0; i < bc.potionCapacity; i++) {
-                    if (bc.potions[i] != Potion::EMPTY_POTION_SLOT) {
-                        // Try targeting each monster
+                    const Potion p = bc.potions[i];
+                    if (p == Potion::EMPTY_POTION_SLOT || p == Potion::INVALID) {
+                        continue;
+                    }
+                    if (potionRequiresTarget(p)) {
                         for (int t = 0; t < bc.monsters.monsterCount; t++) {
                             if (bc.monsters.arr[t].isTargetable()) {
                                 search::Action a(search::ActionType::POTION, i, t);
@@ -717,15 +753,10 @@ void init_rl_bindings(py::module_ &m) {
                                 }
                             }
                         }
-                        // Also try with target 0 for non-targeted potions
+                    } else {
                         search::Action a(search::ActionType::POTION, i, 0);
                         if (a.isValidAction(bc)) {
-                            // Deduplicate: only add if not already present
-                            bool found = false;
-                            for (const auto &existing : actions) {
-                                if (existing == a) { found = true; break; }
-                            }
-                            if (!found) actions.push_back(a);
+                            actions.push_back(a);
                         }
                     }
                 }
@@ -757,6 +788,28 @@ void init_rl_bindings(py::module_ &m) {
     m.def("get_legal_game_actions", [](const GameContext &gc) {
         return search::GameAction::getAllActionsInState(gc);
     }, "get all legal non-combat actions for the current game state");
+
+    // Jump a run to the start of `act` with its current deck/relics/HP/potions:
+    // act-entry heal, fresh map, that act's monster/elite/boss lists and event
+    // pools, screen = MAP_SCREEN (same as the natural boss-chest transition).
+    // Used by mini-climb rollouts (act 4) and the act-3 climb tooling. Keys are
+    // left as they are; callers starting before act 4 seed them. The map is
+    // detached from any GameContext copies first, because copies share the
+    // map shared_ptr and transitionToAct overwrites it in place.
+    m.def("transition_to_act", [](GameContext &gc, int act) {
+        if (act < 2 || act > 4) {
+            throw py::value_error("transition_to_act: act must be 2, 3 or 4");
+        }
+        if (gc.map) {
+            gc.map = std::make_shared<Map>(*gc.map);
+        } else {
+            gc.map = std::make_shared<Map>();
+        }
+        gc.regainControlAction = nullptr;
+        gc.transitionToAct(act);
+    }, py::arg("gc"), py::arg("act"),
+    "Start the run at the top of act 2/3/4 with the current deck and relics "
+    "(act-entry heal, new map, act encounter lists). Leaves screen_state == MAP_SCREEN.");
 
     m.def("get_shop", [](const GameContext &gc) -> const Shop& {
         return gc.info.shop;
