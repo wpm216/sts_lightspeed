@@ -11,6 +11,10 @@
 
 #include <sstream>
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <iterator>
+#include <string>
 #include <vector>
 
 #include "combat/BattleContext.h"
@@ -30,6 +34,50 @@
 
 namespace py = pybind11;
 using namespace sts;
+
+namespace {
+
+    float playerStatusValue(const Player &p, PlayerStatus s) {
+        auto it = p.statusMap.find(s);
+        return it != p.statusMap.end() ? static_cast<float>(it->second) : 0.0f;
+    }
+
+    float monsterStatusValue(const Monster &m, MonsterStatus s) {
+        return static_cast<float>(m.getStatusInternal(s));
+    }
+
+    void appendInt(std::string &out, int value) {
+        const auto v = static_cast<std::int32_t>(value);
+        out.append(reinterpret_cast<const char*>(&v), sizeof(v));
+    }
+
+    void appendFloat(std::string &out, float v) {
+        out.append(reinterpret_cast<const char*>(&v), sizeof(v));
+    }
+
+    void appendCard(std::string &out, const CardInstance &c) {
+        appendInt(out, static_cast<int>(c.id));
+        appendInt(out, c.upgraded ? 1 : 0);
+        appendInt(out, c.costForTurn);
+        appendInt(out, c.retain ? 1 : 0);
+    }
+
+    template <typename It>
+    void appendPile(std::string &out, It begin, It end) {
+        appendInt(out, static_cast<int>(std::distance(begin, end)));
+        for (auto it = begin; it != end; ++it) {
+            appendCard(out, *it);
+        }
+    }
+
+    // Only Discovery and Codex fill cardSelectInfo.cards; for every other task
+    // the array holds leftovers from an earlier select.
+    bool selectHasOfferedCards(const CardSelectInfo &info) {
+        return info.cardSelectTask == CardSelectTask::DISCOVERY
+            || info.cardSelectTask == CardSelectTask::CODEX;
+    }
+
+}
 
 void init_rl_bindings(py::module_ &m) {
 
@@ -256,8 +304,7 @@ void init_rl_bindings(py::module_ &m) {
             py::array_t<float> out(in.shape(0));
             auto out_buf = out.mutable_unchecked<1>();
             for (ssize_t i = 0; i < in.shape(0); i++) {
-                auto s = static_cast<MonsterStatus>(in(i));
-                out_buf(i) = static_cast<float>(m.getStatusInternal(s));
+                out_buf(i) = monsterStatusValue(m, static_cast<MonsterStatus>(in(i)));
             }
             return out;
         }, py::arg("status_ids"),
@@ -312,11 +359,7 @@ void init_rl_bindings(py::module_ &m) {
             py::array_t<float> out(in.shape(0));
             auto out_buf = out.mutable_unchecked<1>();
             for (ssize_t i = 0; i < in.shape(0); i++) {
-                auto s = static_cast<PlayerStatus>(in(i));
-                auto it = p.statusMap.find(s);
-                out_buf(i) = (it != p.statusMap.end())
-                                 ? static_cast<float>(it->second)
-                                 : 0.0f;
+                out_buf(i) = playerStatusValue(p, static_cast<PlayerStatus>(in(i)));
             }
             return out;
         }, py::arg("status_ids"),
@@ -500,6 +543,8 @@ void init_rl_bindings(py::module_ &m) {
         .def(py::init<const BattleContext &>(), "copy constructor")
         .def("__copy__", [](const BattleContext &bc) { return BattleContext(bc); })
         .def("__deepcopy__", [](const BattleContext &bc, py::dict) { return BattleContext(bc); })
+        .def("clone", [](const BattleContext &bc) { return BattleContext(bc); },
+            "Copy-constructor clone, without copy.deepcopy's memo-dict overhead.")
         .def("init", py::overload_cast<const GameContext&>(&BattleContext::init),
             "initialize battle from a GameContext that is in BATTLE screen state")
         .def("init", py::overload_cast<const GameContext&, MonsterEncounter>(&BattleContext::init),
@@ -597,10 +642,7 @@ void init_rl_bindings(py::module_ &m) {
             if (bc.inputState != InputState::CARD_SELECT) {
                 return out;
             }
-            const auto task = bc.cardSelectInfo.cardSelectTask;
-            // Only Discovery and Codex fill cardSelectInfo.cards; for every
-            // other task the array holds leftovers from an earlier select.
-            if (task == CardSelectTask::DISCOVERY || task == CardSelectTask::CODEX) {
+            if (selectHasOfferedCards(bc.cardSelectInfo)) {
                 for (const auto c : bc.cardSelectInfo.cards) {
                     out.push_back(static_cast<int>(c));
                 }
@@ -608,6 +650,86 @@ void init_rl_bindings(py::module_ &m) {
             return out;
         }, "CardId ints offered by the pending Discovery / Codex select; empty for "
            "selects that pick from hand or piles, and when no select is open.")
+
+        // In-combat transposition key in one call. Must partition states exactly
+        // as the tuple in sts_rl.gumbel_mcts.state_key does (equal bytes iff
+        // equal tuples), not reproduce its layout; tests/test_engine_fast_paths.py
+        // checks this. Change both together.
+        .def("state_key_bytes", [](const BattleContext &bc,
+                                   py::array_t<int> player_status_ids,
+                                   py::array_t<int> monster_status_ids) {
+            auto plrIds = player_status_ids.unchecked<1>();
+            auto monIds = monster_status_ids.unchecked<1>();
+
+            std::string out;
+            out.reserve(1024);
+            appendInt(out, bc.turn);
+            appendInt(out, static_cast<int>(bc.inputState));
+            appendInt(out, static_cast<int>(bc.outcome));
+
+            const Player &p = bc.player;
+            for (int v : {static_cast<int>(p.curHp), static_cast<int>(p.maxHp),
+                          static_cast<int>(p.energy), static_cast<int>(p.block),
+                          static_cast<int>(p.strength), static_cast<int>(p.dexterity),
+                          static_cast<int>(p.focus), static_cast<int>(p.artifact)}) {
+                appendInt(out, v);
+            }
+            for (ssize_t i = 0; i < plrIds.shape(0); ++i) {
+                appendFloat(out, playerStatusValue(p, static_cast<PlayerStatus>(plrIds(i))));
+            }
+
+            appendInt(out, bc.monsters.monsterCount);
+            for (int i = 0; i < bc.monsters.monsterCount; ++i) {
+                const Monster &mon = bc.monsters.arr[i];
+                for (int v : {static_cast<int>(mon.id), static_cast<int>(mon.curHp),
+                              static_cast<int>(mon.block), static_cast<int>(mon.strength),
+                              static_cast<int>(mon.vulnerable), static_cast<int>(mon.weak),
+                              static_cast<int>(mon.poison), static_cast<int>(mon.artifact),
+                              static_cast<int>(mon.metallicize), static_cast<int>(mon.platedArmor),
+                              static_cast<int>(mon.regen), static_cast<int>(mon.moveHistory[0])}) {
+                    appendInt(out, v);
+                }
+                for (ssize_t j = 0; j < monIds.shape(0); ++j) {
+                    appendFloat(out, monsterStatusValue(mon, static_cast<MonsterStatus>(monIds(j))));
+                }
+            }
+
+            // Hand order has no game effect, so the hand keys as a multiset.
+            std::vector<std::array<int, 4>> hand;
+            hand.reserve(bc.cards.cardsInHand);
+            for (int i = 0; i < bc.cards.cardsInHand; ++i) {
+                const CardInstance &c = bc.cards.hand[i];
+                hand.push_back({static_cast<int>(c.id), c.upgraded ? 1 : 0,
+                                static_cast<int>(c.costForTurn), c.retain ? 1 : 0});
+            }
+            std::sort(hand.begin(), hand.end());
+            appendInt(out, static_cast<int>(hand.size()));
+            for (const auto &card : hand) {
+                for (int v : card) {
+                    appendInt(out, v);
+                }
+            }
+            appendPile(out, bc.cards.drawPile.begin(), bc.cards.drawPile.end());
+            appendPile(out, bc.cards.discardPile.begin(), bc.cards.discardPile.end());
+            appendPile(out, bc.cards.exhaustPile.begin(), bc.cards.exhaustPile.end());
+
+            appendInt(out, bc.potionCapacity);
+            for (int i = 0; i < bc.potionCapacity; ++i) {
+                appendInt(out, static_cast<int>(bc.potions[i]));
+            }
+
+            // Which select is pending (the Python key's _card_select_key).
+            if (bc.inputState == InputState::CARD_SELECT) {
+                appendInt(out, static_cast<int>(bc.cardSelectInfo.cardSelectTask));
+                if (selectHasOfferedCards(bc.cardSelectInfo)) {
+                    for (CardId c : bc.cardSelectInfo.cards) {
+                        appendInt(out, static_cast<int>(c));
+                    }
+                }
+            }
+            return py::bytes(out);
+        }, py::arg("player_status_ids"), py::arg("monster_status_ids"),
+           "Canonical in-combat transposition key as bytes, built in one call.")
 
         // State
         .def_readonly("outcome", &BattleContext::outcome)
@@ -791,6 +913,34 @@ void init_rl_bindings(py::module_ &m) {
     // Extend GameContext with action interface
     // ============================
     // We add these as module-level functions since GameContext is already bound
+    m.def("clone_game_context", [](const GameContext &gc) { return GameContext(gc); },
+        "Copy-constructor clone, without copy.deepcopy's memo-dict overhead.");
+
+    // Master-deck counterpart of BattleContext.get_pile_token_array: same
+    // token_table layout (index = card_id*2 + upgraded) and zero padding.
+    m.def("get_deck_token_array",
+          [](const GameContext &gc, py::array_t<int64_t> token_table, int max_size) {
+        py::array_t<int64_t> out(max_size);
+        auto out_buf = out.mutable_unchecked<1>();
+        auto tt = token_table.unchecked<1>();
+        for (int i = 0; i < max_size; ++i) {
+            out_buf(i) = 0;
+        }
+        int i = 0;
+        for (const auto &card : gc.deck.cards) {
+            if (i >= max_size) {
+                break;
+            }
+            const int idx = static_cast<int>(card.id) * 2 + (card.upgraded ? 1 : 0);
+            if (idx >= 0 && idx < tt.shape(0)) {
+                out_buf(i) = tt(idx);
+            }
+            ++i;
+        }
+        return out;
+    }, py::arg("gc"), py::arg("token_table"), py::arg("max_size"),
+       "Master deck as int64[max_size] network tokens in one call.");
+
     m.def("get_legal_game_actions", [](const GameContext &gc) {
         return search::GameAction::getAllActionsInState(gc);
     }, "get all legal non-combat actions for the current game state");
