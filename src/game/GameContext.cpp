@@ -706,10 +706,13 @@ void GameContext::transitionToAct(int targetAct) {
 
     curMapNodeX = -1;
     curMapNodeY = -1;
+    // A new Map, not an assignment through the pointer: GameContext copies
+    // share `map`, so writing *map from a search copy would replace the real
+    // run's map too.
     if (targetAct == 2 || targetAct == 3) {
-        *map = Map::fromSeed(seed, ascension, targetAct, !hasKey(Key::EMERALD_KEY));
+        map = std::make_shared<Map>(Map::fromSeed(seed, ascension, targetAct, !hasKey(Key::EMERALD_KEY)));
     } else if (targetAct == 4) {
-        *map = Map::act4Map();
+        map = std::make_shared<Map>(Map::act4Map());
     }
 
     colorlessCardPool = baseColorlessPool;
@@ -757,7 +760,7 @@ void GameContext::transitionToMapNode(int mapNodeX) {
     ++floorNum;
     ++curMapNodeY;
 
-    const auto r = Random(seed + floorNum);
+    const auto r = Random(seed + floorNum + rngSalt);
     miscRng = r;
     shuffleRng = r;
     cardRandomRng = r;
@@ -1064,8 +1067,13 @@ void GameContext::setupEvent() { // todo necronomicon event
 void GameContext::setupTreasureRoom() {
     screenState = ScreenState::TREASURE_ROOM;
     info.chestSize = getRandomChestSize(treasureRng);
+    rollTreasureChestContents(treasureRng);
+}
 
-    int roll = treasureRng.random(99);
+// The chest's size shows before it opens; whether it holds gold and the relic
+// tier don't.
+void GameContext::rollTreasureChestContents(Random &rng) {
+    int roll = rng.random(99);
     info.haveGold = roll < chestGoldChances[static_cast<int>(info.chestSize)];
 
     const auto tierChances = chestRelicTierChances[static_cast<int>(info.chestSize)];
@@ -1081,9 +1089,99 @@ void GameContext::setupTreasureRoom() {
 }
 
 
+namespace {
+    // splitmix64 step: a stream of well-mixed values from one seed.
+    std::uint64_t splitmixNext(std::uint64_t &state) {
+        state += 0x9E3779B97F4A7C15ULL;
+        std::uint64_t z = state;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+        z ^= (z >> 31);
+        return z == 0 ? 1ULL : z;
+    }
+
+    template <typename It>
+    void splitmixShuffle(It begin, It end, std::uint64_t &state) {
+        const auto n = static_cast<std::int64_t>(end - begin);
+        for (std::int64_t i = n - 1; i > 0; --i) {
+            const auto j = static_cast<std::int64_t>(splitmixNext(state) % static_cast<std::uint64_t>(i + 1));
+            std::swap(*(begin + i), *(begin + j));
+        }
+    }
+}
+
+void GameContext::reseedHiddenRngs(std::uint64_t s) {
+    Random *rngs[] = {
+        &aiRng, &cardRandomRng, &cardRng, &eventRng, &mathUtilRng, &merchantRng, &miscRng,
+        &monsterHpRng, &monsterRng, &neowRng, &potionRng, &relicRng, &shuffleRng, &treasureRng,
+    };
+    std::uint64_t state = s;
+    for (Random *r : rngs) {
+        // The counter is call-count bookkeeping (act transitions bump cardRng
+        // to the next multiple of 250); keep it so the copy ages the same way.
+        const auto counter = r->counter;
+        *r = Random(splitmixNext(state));
+        r->counter = counter;
+    }
+    rngSalt = splitmixNext(state);
+}
+
+void GameContext::resampleHiddenInfo(std::uint64_t s) {
+    std::uint64_t state = s;
+
+    // Relic rewards come off the front of these pools.
+    splitmixShuffle(commonRelicPool.begin(), commonRelicPool.end(), state);
+    splitmixShuffle(uncommonRelicPool.begin(), uncommonRelicPool.end(), state);
+    splitmixShuffle(rareRelicPool.begin(), rareRelicPool.end(), state);
+    splitmixShuffle(shopRelicPool.begin(), shopRelicPool.end(), state);
+    splitmixShuffle(bossRelicPool.begin(), bossRelicPool.end(), state);
+
+    // Upcoming hallway and elite fights. Regenerating the whole list keeps the
+    // weak/strong split by position; entries before the offsets are spent. The
+    // boss is on the map, so it stays. Act 4's lists are fixed.
+    if (act >= 1 && act <= 3) {
+        const auto realBoss = boss;
+        const auto realSecondBoss = secondBoss;
+        const Random realMonsterRng = monsterRng;
+        monsterRng = Random(splitmixNext(state));
+        monsterList.clear();
+        eliteMonsterList.clear();
+        generateMonsters();
+        monsterRng = realMonsterRng;
+        boss = realBoss;
+        secondBoss = realSecondBoss;
+        monsterListOffset = std::min(monsterListOffset, static_cast<int>(monsterList.size()));
+        eliteMonsterListOffset = std::min(eliteMonsterListOffset, static_cast<int>(eliteMonsterList.size()));
+
+        // The A20 second boss isn't shown until the first one dies.
+        if (act == 3 && secondBoss != MonsterEncounter::INVALID) {
+            MonsterEncounter others[2];
+            int n = 0;
+            for (auto b : {MonsterEncounter::AWAKENED_ONE, MonsterEncounter::TIME_EATER, MonsterEncounter::DONU_AND_DECA}) {
+                if (b != boss && n < 2) {
+                    others[n++] = b;
+                }
+            }
+            if (n > 0) {
+                secondBoss = others[splitmixNext(state) % n];
+            }
+        }
+    }
+
+    if (screenState == ScreenState::TREASURE_ROOM) {
+        Random chestRng(splitmixNext(state));
+        rollTreasureChestContents(chestRng);
+    }
+
+    if (screenState == ScreenState::EVENT_SCREEN && curEvent == Event::DEAD_ADVENTURER
+        && info.phase >= 0 && info.phase < 3) {
+        splitmixShuffle(info.rewards.begin() + info.phase, info.rewards.end(), state);
+    }
+}
+
 void GameContext::enterBossTreasureRoom() {
     ++floorNum;
-    Random r(seed+floorNum);
+    Random r(seed + floorNum + rngSalt);
     miscRng = r;
     shuffleRng = r;
     cardRandomRng = r;
@@ -1158,7 +1256,7 @@ void GameContext::afterBattle() {
                 if (ascension >= 20 && info.encounter == boss) {
                     // go to second boss
                     ++floorNum;
-                    const auto r = Random(seed + floorNum);
+                    const auto r = Random(seed + floorNum + rngSalt);
                     miscRng = r;
                     shuffleRng = r;
                     cardRandomRng = r;

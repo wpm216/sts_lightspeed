@@ -580,23 +580,41 @@ void init_rl_bindings(py::module_ &m) {
         "from search also needs resample_hidden_draw_order, and the committed move "
         "must not share the sampled state.")
         // Fisher-Yates over the part of the draw pile the player can't see the
-        // order of. Index meaning has to survive so search on the sampled state
-        // can act on the real one, which rules out reordering while a select that
-        // indexes the draw pile is open. Frozen Eye shows the real order.
+        // order of. Frozen Eye shows the real order.
+        //
+        // Secret Technique / Secret Weapon selects list the eligible cards in
+        // pile order, and the choice is a pile index. Search picks on the
+        // sampled state and the pick is played on the real one, so the k-th
+        // eligible card has to be the same card in both. The shuffle therefore
+        // keeps the eligible cards in their real relative order (at shuffled
+        // positions); everything else moves freely. Seek can pick any card, so
+        // under Seek nothing moves.
         .def("resample_hidden_draw_order", [](BattleContext &bc, std::uint64_t seed) -> int {
             if (bc.player.hasRelicRuntime(RelicId::FROZEN_EYE)) {
                 return 0;
             }
+            bool pinType = false;
+            CardType pinnedType = CardType::SKILL;
             if (bc.inputState == InputState::CARD_SELECT) {
                 const auto task = bc.cardSelectInfo.cardSelectTask;
-                if (task == CardSelectTask::SECRET_TECHNIQUE
-                    || task == CardSelectTask::SECRET_WEAPON
-                    || task == CardSelectTask::SEEK) {
+                if (task == CardSelectTask::SEEK) {
                     return 0;
+                }
+                if (task == CardSelectTask::SECRET_TECHNIQUE || task == CardSelectTask::SECRET_WEAPON) {
+                    pinType = true;
+                    pinnedType = task == CardSelectTask::SECRET_TECHNIQUE ? CardType::SKILL : CardType::ATTACK;
                 }
             }
             auto &pile = bc.cards.drawPile;
             const int hidden = static_cast<int>(pile.size()) - bc.cards.knownDrawTopCount;
+            std::vector<CardInstance> pinnedInOrder;
+            if (pinType) {
+                for (int i = 0; i < hidden; ++i) {
+                    if (pile[i].getType() == pinnedType) {
+                        pinnedInOrder.push_back(pile[i]);
+                    }
+                }
+            }
             std::uint64_t st = seed;
             for (int i = hidden - 1; i > 0; --i) {
                 st += 0x9E3779B97F4A7C15ULL;
@@ -609,12 +627,22 @@ void init_rl_bindings(py::module_ &m) {
                 pile[i] = pile[j];
                 pile[j] = tmp;
             }
+            if (pinType) {
+                std::size_t k = 0;
+                for (int i = 0; i < hidden; ++i) {
+                    if (pile[i].getType() == pinnedType) {
+                        pile[i] = pinnedInOrder[k++];
+                    }
+                }
+            }
             return std::max(hidden, 0);
         }, py::arg("seed"),
         "Shuffle the draw-pile cards whose position the player doesn't know, in "
         "place, leaving known top cards (Warcry, Headbutt, rebound) where they are. "
-        "Does not touch the RNGs. Returns how many cards were eligible; 0 under "
-        "Frozen Eye or while a draw-pile-indexed card select is open.")
+        "Under an open Secret Technique / Secret Weapon select the selectable cards "
+        "keep their relative order, so select choices mean the same card on the "
+        "real state. Does not touch the RNGs. Returns how many cards were eligible "
+        "to move; 0 under Frozen Eye or an open Seek select.")
         .def_property_readonly("known_draw_top_count", [](const BattleContext &bc) {
             return bc.cards.knownDrawTopCount;
         }, "Number of top draw-pile cards whose position the player legitimately knows.")
@@ -966,6 +994,25 @@ void init_rl_bindings(py::module_ &m) {
     }, py::arg("gc"), py::arg("act"),
     "Start the run at the top of act 2/3/4 with the current deck and relics "
     "(act-entry heal, new map, act encounter lists). Leaves screen_state == MAP_SCREEN.");
+
+    // Honest overworld search: the GameContext counterparts of
+    // bc.reseed_combat_rng / bc.resample_hidden_draw_order. Call them on a
+    // search copy, never on the state the chosen move is played on.
+    m.def("reseed_game_rng", [](GameContext &gc, std::uint64_t seed) {
+        gc.reseedHiddenRngs(seed);
+    }, py::arg("gc"), py::arg("seed"),
+    "Replace every GameContext RNG state (card, event, relic, potion, treasure, "
+    "merchant, monster, ...) with one derived from `seed`, and salt the RNGs "
+    "built from seed+floor at room entry and combat start. gc.seed is unchanged, "
+    "so the current map stays the real one. Doesn't reorder anything already "
+    "generated; see resample_hidden_game_info.");
+    m.def("resample_hidden_game_info", [](GameContext &gc, std::uint64_t seed) {
+        gc.resampleHiddenInfo(seed);
+    }, py::arg("gc"), py::arg("seed"),
+    "Resample what's already generated but hidden: relic pool order, upcoming "
+    "hallway and elite encounters, the A20 second boss, an unopened chest's gold "
+    "and relic tier, and Dead Adventurer's remaining loot order. Leaves what the "
+    "player can see (map, boss, offered rewards, shop stock) alone.");
 
     m.def("get_shop", [](const GameContext &gc) -> const Shop& {
         return gc.info.shop;

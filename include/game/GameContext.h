@@ -156,6 +156,11 @@ namespace sts {
 
         // ********* hidden from player *********
         std::uint64_t seed;
+        // Mixed into the RNGs built from seed+floorNum (room entry, combat init).
+        // 0 in a real game. reseedHiddenRngs sets it on a search copy so the copy
+        // can't replay the real per-room and per-combat rolls. `seed` itself stays
+        // real: the current map, and the encoder's map features, come from it.
+        std::uint64_t rngSalt = 0;
 
         Random aiRng;
         Random cardRandomRng;
@@ -239,6 +244,15 @@ namespace sts {
         GameContext() = default;
         GameContext(CharacterClass cc, std::uint64_t seed, int ascensionLevel);
 
+        // Honest search: give a copy fresh values for what the player can't see.
+        // reseedHiddenRngs replaces every RNG state (counters kept) and rngSalt;
+        // resampleHiddenInfo reorders the relic pools, rerolls the encounter
+        // lists past the current position, the A20 second boss, an unopened
+        // chest's contents and Dead Adventurer's remaining loot order. Neither
+        // touches what the player can see, so legal actions are unchanged.
+        void reseedHiddenRngs(std::uint64_t seed);
+        void resampleHiddenInfo(std::uint64_t seed);
+
         void initFromSave(const SaveFile &s);
         void initRelicsFromSave(const SaveFile &s);
 
@@ -270,6 +284,7 @@ namespace sts {
         void transitionToMapNode(int mapNodeX);
         void setupEvent();
         void setupTreasureRoom();
+        void rollTreasureChestContents(Random &rng);
         void enterBossTreasureRoom();
         void enterAct3VictoryRoom();
         void enterBattle(MonsterEncounter encounter);
