@@ -577,19 +577,26 @@ void init_rl_bindings(py::module_ &m) {
         // Which card select is pending, and what it offers. input_state only
         // says *a* select is open; search needs to tell a Discovery apart from
         // the Forethought / Secret Technique selects its cards open, or they
-        // share a transposition-table node. Only meaningful while
-        // input_state == CARD_SELECT: cardSelectInfo is stale afterwards.
+        // share a transposition-table node. Both return the empty answer
+        // outside a select: cardSelectInfo is stale then, and cardSelectTask
+        // is uninitialized before the first select of a combat.
         .def("card_select_task", [](const BattleContext &bc) -> std::string {
+            if (bc.inputState != InputState::CARD_SELECT) {
+                return "INVALID";
+            }
             const int t = static_cast<int>(bc.cardSelectInfo.cardSelectTask);
             constexpr int n = static_cast<int>(sizeof(cardSelectTaskStrings) / sizeof(cardSelectTaskStrings[0]));
             if (t < 0 || t >= n) {
                 return "INVALID";
             }
             return cardSelectTaskStrings[t];
-        }, "Name of the pending card-select task (e.g. 'DISCOVERY', 'FORETHOUGHT'). "
-           "Only meaningful while input_state == CARD_SELECT.")
+        }, "Name of the pending card-select task (e.g. 'DISCOVERY', 'FORETHOUGHT'); "
+           "'INVALID' when no select is open.")
         .def("card_select_cards", [](const BattleContext &bc) -> std::vector<int> {
             std::vector<int> out;
+            if (bc.inputState != InputState::CARD_SELECT) {
+                return out;
+            }
             const auto task = bc.cardSelectInfo.cardSelectTask;
             // Only Discovery and Codex fill cardSelectInfo.cards; for every
             // other task the array holds leftovers from an earlier select.
@@ -600,8 +607,7 @@ void init_rl_bindings(py::module_ &m) {
             }
             return out;
         }, "CardId ints offered by the pending Discovery / Codex select; empty for "
-           "selects that pick from hand or piles. Only meaningful while "
-           "input_state == CARD_SELECT.")
+           "selects that pick from hand or piles, and when no select is open.")
 
         // State
         .def_readonly("outcome", &BattleContext::outcome)
