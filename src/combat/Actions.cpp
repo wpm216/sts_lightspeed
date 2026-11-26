@@ -150,8 +150,25 @@ Action Actions::NoOpRollMove() {
     }};
 }
 
+// Minimal ChangeStanceAction. The engine has no Watcher card pool, so only
+// the stance switch and the energy from leaving Calm / entering Divinity are
+// modelled (no onChangeStance hooks such as Mental Fortress or Rushdown).
+// Outgoing Wrath/Divinity damage multipliers are not applied anywhere yet;
+// incoming Wrath damage is (Monster::calculateDamageToPlayer).
 Action Actions::ChangeStance(Stance stance) {
-    return sts::Action();
+    return {[=] (BattleContext &bc) {
+        auto &p = bc.player;
+        if (p.stance == stance) {
+            return;
+        }
+        if (p.stance == Stance::CALM) {
+            p.gainEnergy(p.hasRelic<R::VIOLET_LOTUS>() ? 3 : 2);
+        }
+        p.stance = stance;
+        if (stance == Stance::DIVINITY) {
+            p.gainEnergy(3);
+        }
+    }};
 }
 
 Action Actions::GainEnergy(int amount) {
@@ -913,12 +930,23 @@ Action Actions::UpgradeAllCardsInHand() {
     }};
 }
 
+// Orbs are not modelled (Player::channelOrb / increaseOrbSlots are no-ops),
+// so these route to those helpers like the Inserter relic already does.
+// For a class with no orb slots, Essence of Darkness channels nothing in the
+// real game either.
 Action Actions::EssenceOfDarkness(int darkOrbsPerSlot) {
-    return sts::Action();
+    return {[=] (BattleContext &bc) {
+        const int count = bc.player.orbSlots * darkOrbsPerSlot;
+        for (int i = 0; i < count; ++i) {
+            bc.player.channelOrb(Orb::DARK);
+        }
+    }};
 }
 
 Action Actions::IncreaseOrbSlots(int count) {
-    return sts::Action();
+    return {[=] (BattleContext &bc) {
+        bc.player.increaseOrbSlots(count);
+    }};
 }
 
 Action Actions::SuicideAction(int monsterIdx, bool triggerRelics) {
@@ -934,8 +962,27 @@ Action Actions::SuicideAction(int monsterIdx, bool triggerRelics) {
     }};
 }
 
-Action Actions::PoisonLoseHpAction() {
-    return sts::Action();
+// PoisonLoseHpAction: HP_LOSS damage equal to the poison stacks counted when
+// the action was queued (PoisonPower.atStartOfTurn), then poison drops by 1
+// and is removed at 0. HP_LOSS skips block and the attack-only reactions
+// (Curl Up, Malleable, Plated Armor, Thorns, Angry). Monster Intangible only
+// caps damage that went through DamageInfo.applyPowers, which HP_LOSS does
+// not, so it doesn't apply either. damageUnblockedHelper covers what does
+// apply: Invincible, waking Lagavulin, Shifting, death and onHpLost (slime
+// split, Guardian mode shift).
+Action Actions::PoisonLoseHpAction(int monsterIdx, int amount) {
+    return {[=] (BattleContext &bc) {
+        auto &m = bc.monsters.arr[monsterIdx];
+        if (m.isDeadOrEscaped()) {
+            return;
+        }
+        if (amount > 0) {
+            m.damageUnblockedHelper(bc, amount);
+        }
+        if (m.hasStatus<MS::POISON>()) {
+            m.decrementStatus<MS::POISON>();
+        }
+    }};
 }
 
 Action Actions::RemovePlayerDebuffs() {

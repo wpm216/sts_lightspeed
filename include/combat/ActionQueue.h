@@ -12,6 +12,7 @@
 #include <functional>
 #include <iostream>
 #include <cassert>
+#include <stdexcept>
 
 
 namespace sts {
@@ -28,11 +29,13 @@ namespace sts {
         Action(ActionFunction a, bool b) : actFunc(std::move(a)), clearOnCombatVictory(b) {}
     };
 
-    // Diagnostic helper for the empty-actFunc bug. Invoked by ActionQueue
-    // push paths when a default-constructed Action() reaches them. Logs a
-    // C++ backtrace and current BattleContext context (via g_debug_bc) to
-    // identify the offending pusher, then refuses the push. See CLAUDE.md
-    // ("BC empty actFunc / ActionQueue empty push" section).
+    // Diagnostic helper for empty Action() pushes. Logs a C++ backtrace and
+    // the current BattleContext (via g_debug_bc) so the pusher can be found.
+    // The push helpers below then throw: every Actions:: factory returns a
+    // real actFunc, so an empty push is a bug and must not be skipped
+    // silently (dropping it used to leave e.g. poison never ticking).
+    // pybind surfaces the throw as RuntimeError. See CLAUDE.md
+    // ("Monitor: empty-actFunc diagnostics").
     void logEmptyActionPush(const char *site);
 
 
@@ -83,7 +86,7 @@ namespace sts {
 #endif
         if (!a.actFunc) {
             logEmptyActionPush("pushFront");
-            return; // refuse the push
+            throw std::logic_error("ActionQueue::pushFront: empty Action (no actFunc)");
         }
         --front;
         ++size;
@@ -103,7 +106,7 @@ namespace sts {
 #endif
         if (!a.actFunc) {
             logEmptyActionPush("pushBack");
-            return; // refuse the push
+            throw std::logic_error("ActionQueue::pushBack: empty Action (no actFunc)");
         }
         if (back >= capacity) {
             back = 0;

@@ -13,10 +13,6 @@ using namespace sts;
 namespace sts {
     thread_local BattleContext *g_debug_bc;
 
-    thread_local void *g_last_poison_set_bt[24];
-    thread_local int g_last_poison_set_bt_n = 0;
-    thread_local int g_last_poison_set_count = 0;
-
     // Full diagnostic for empty-Action push. Dumps the current
     // BattleContext context (encounter, turn, monster intents, status flags)
     // alongside a C++ backtrace. Without DWARF we can't atos the addresses,
@@ -59,18 +55,6 @@ namespace sts {
         void *bt[16];
         int n = backtrace(bt, 16);
         backtrace_symbols_fd(bt, n, 2);
-
-        // Dump the captured POISON-set call stack (most recent
-        // transition into hasStatus<POISON>=true on this thread).
-        // Without DWARF symbolization the addresses are raw, but we
-        // can correlate offline with objdump / dwarfdump on the .o
-        // files in engine/build_py312/CMakeFiles/slaythespire.dir/.
-        std::cerr << "last POISON-set count=" << g_last_poison_set_count
-                  << " bt_frames=" << g_last_poison_set_bt_n << ":\n";
-        if (g_last_poison_set_bt_n > 0) {
-            backtrace_symbols_fd(g_last_poison_set_bt,
-                                 g_last_poison_set_bt_n, 2);
-        }
     }
 }
 
