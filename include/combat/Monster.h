@@ -50,17 +50,21 @@ namespace sts {
         MMID moveHistory[2] = {MMID::INVALID, MMID::INVALID };
 
         std::uint64_t statusBits = 0;
-        std::int8_t artifact = 0;
-        std::int8_t blockReturn = 0;
-        std::int8_t choked = 0;
-        std::int8_t corpseExplosion = 0;
-        std::int8_t lockOn = 0;
-        std::int16_t mark = 0;
-        std::int8_t metallicize = 0;
-        std::int8_t platedArmor = 0;
-        std::int8_t poison = 0;
-        std::int8_t regen = 0;
-        std::int8_t shackled = 0;
+        // Stack counters are full ints. As int8_t they wrapped above 127:
+        // Transient's Shifting adds every HP lost in a turn to `shackled`, so a
+        // 128+ HP turn restored a negative amount of Strength (#15 is the same
+        // bug for poison).
+        int artifact = 0;
+        int blockReturn = 0;
+        int choked = 0;
+        int corpseExplosion = 0;
+        int lockOn = 0;
+        int mark = 0;
+        int metallicize = 0;
+        int platedArmor = 0;
+        int poison = 0;
+        int regen = 0;
+        int shackled = 0;
         int strength = 0;
         int vulnerable = 0;
         int weak = 0;
