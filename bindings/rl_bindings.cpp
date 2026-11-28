@@ -276,6 +276,13 @@ void init_rl_bindings(py::module_ &m) {
         .def("get_move_damage", [](const Monster &m, const BattleContext &bc) {
             return m.getMoveBaseDamage(bc);
         }, "get base damage info for monster's current move")
+        .def("get_move_damage_to_player", [](const Monster &m, const BattleContext &bc) {
+            const auto d = m.getMoveBaseDamage(bc);
+            const int perHit = d.damage > 0 ? m.calculateDamageToPlayer(bc, d.damage) : 0;
+            return py::make_tuple(perHit, d.damage > 0 ? static_cast<int>(d.attackCount) : 0);
+        }, "(damage per hit, hits) the current move would deal to the player now: the "
+           "intent number the game shows (monster Strength / Weak, player Vulnerable, "
+           "Intangible, Wrath), before the player's block")
         .def_property_readonly("move_id_int", [](const Monster &m) -> int {
             return static_cast<int>(m.moveHistory[0]);
         }, "current move as integer (MonsterMoveId enum value)")
