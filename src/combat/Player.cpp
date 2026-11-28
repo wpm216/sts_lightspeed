@@ -684,7 +684,8 @@ void Player::applyStartOfTurnPostDrawPowers(BattleContext &bc) {
 
         switch (pair.first) {
             case PS::BRUTALITY:
-                bc.addToBot( Actions::PlayerLoseHp(pair.second) );
+                // The player is the source, so Rupture triggers (as in the game).
+                bc.addToBot( Actions::PlayerLoseHp(pair.second, true) );
                 bc.addToBot( Actions::DrawCards(pair.second) );
                 break;
 
