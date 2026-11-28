@@ -99,6 +99,7 @@ PYBIND11_MODULE(slaythespire, m) {
         .def_readwrite("cur_map_node_x", &GameContext::curMapNodeX)
         .def_readwrite("cur_map_node_y", &GameContext::curMapNodeY)
         .def_readwrite("cur_room", &GameContext::curRoom)
+        .def_readwrite("last_room", &GameContext::lastRoom)
         .def_readwrite("cur_event", &GameContext::curEvent)
         .def_readwrite("boss", &GameContext::boss)
 
